@@ -15,6 +15,12 @@ periodicity = ['parallel', ['series', ['h', 1, -1]], ['series', ['parallel', ['s
                   ['parallel', ['series', ['c', 1, -1]], ['series', ['c', 0, -1]], ['series', charSummer]],
                   ['parallel', ['series', ['t', 1, -1]], ['series', ['c', 0, -1]], ['series', charAutumn]]]]]]
 
+revolve = ['parallel', ['series', ['h', 1, 0]], ['series', ['c', 1, 0], ['parallel', ['series', ['h', 0, 0]], ['series', ['c', 0, 0], ['parallel', ['series', ['c', 1, 0]], ['series', ['t', 0, 0]], ['series', ['ṡ', 0, 0]], ['series', ['ṡ', 1, 0]]],
+                ['parallel', ['series', ['t', 1, 0]], ['series', ['t', 0, 0]]], ['t', 0, 0]]],
+                ['parallel', ['series', ['h', 0, 0]], ['series', ['c', 0, 0],
+                  ['parallel', ['series', ['c', 1, 0]], ['series', ['c', 0, 0]]],
+                  ['parallel', ['series', ['t', 1, 0]], ['series', ['c', 0, 0]]], ['t', 0, 0]]], ['t', 1, 0]
+                                                 ]]
 
 notOp = ['parallel', ['series',
                             ['h', 0, -1],
