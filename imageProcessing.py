@@ -15,12 +15,14 @@ import networkx as nx
 import matplotlib.colors as mcolors
 from matplotlib.image import imread
 import demoBackups
+import ItiParser
+import imageio
 
 fontNames = ['Yu Gothic', 'Segoe UI Symbol']
 
 profiler = LineProfiler()
 
-depthMax = 3
+depthMax = 2
 punishment = 5  # punishment factor to simple hexagrams (0, 0, 0), (0.5, 0.5, 0.5), (1, 1, 1)
 punishmentDyn = 2
 hexMap = {'坤卦': (0, 0, 0), '艮卦2': (1, 0, 0), '艮卦': (1, 0, 0), '坎卦': (0, 1, 0), '巽卦': (1, 1, 0),
@@ -59,14 +61,18 @@ colorMode = False
 colorA = (255, 0, 0)
 colorB = (0, 200, 200)
 unknownTree = ['parallel', ['series', ['ṡ', 0, 0]], ['series', ['m', 0, 0]]]
+unknownTree = ['parallel', ['series', ['h', 0, 0]]]
 global axes
 global fig
 global ani
 global axPrev
 global axNext
-global buttonPrev
-global buttonNext
+global buttonPrevTree
+global buttonNextTree
+global buttonPrevSeq
+global buttonNextSeq
 global curGalleryInd
+global curSeqInd
 global numGallery
 
 
@@ -318,6 +324,7 @@ def splitImage(pixels, origin, depth=0, flow=None, bothOrient=False, flexible=Tr
             for j in range(round(division * i), round(division * (i + 1))):
                 pixelDict += pixels[j]
             pixelLens.append(len(pixelDict))
+            print("pixel dict", pixelDict)
             pixelSums[i] = sum(pixelDict)
         results = getScore(pixelSums=pixelSums, pixelLens=pixelLens, verbose=True)
         score = results[0]
@@ -941,6 +948,25 @@ def hollowDynamic(guideTree):
         return guideTree
 
 
+def removeVoid(guideTree):
+    if guideTree[0] == 'parallel':
+        newGuideTree = guideTree[:-1] if guideTree[-1] == 'filler' else guideTree
+        guideTree = ['parallel']
+        for branch in newGuideTree[1:]:
+            if not all([branch[i][0] == 'h' for i in range(1, len(branch))]):
+                guideTree.append(branch)
+        if len(guideTree) == 1:
+            guideTree.append(['series', ['h', 0, 0]])
+
+    if guideTree[0] in ['series', 'parallel']:
+        newGuideTree = [guideTree[0]]
+        for comp in guideTree[1:]:
+            newGuideTree.append(removeVoid(comp))
+    else:
+        newGuideTree = guideTree
+
+    return newGuideTree
+
 def getAllLayers(guideTree):
     layerLst = []
     if guideTree[0] in ['series', 'parallel']:
@@ -984,7 +1010,7 @@ def countBranch(tree):
 
 
 def drawGuideTree(tree, precision=1, lastProbDicts=[], layerMode=False, normalize=True, verbose=False,
-                  hollowDyn=False, elongated=1, frameStart=0, frameDiv=1, moveHistDict=None, displayTree=False):
+                  hollowDyn=False, elongated=1, frameStart=0, frameDiv=1, moveHistDict=None, displayTree=False, reverse=True):
     # precision means the divisor of the frame gap between each coordinate update
     global depthMax
     global unknownTree
@@ -1007,9 +1033,9 @@ def drawGuideTree(tree, precision=1, lastProbDicts=[], layerMode=False, normaliz
     frameILst = []
     while frameI < frameLen * (1 + frameStart):
         if lastFrameI != -1 and frameI == lastFrameI:
+            lastFrameI = frameI
             framePrecI += frameLen / precision
             frameI = round(framePrecI)
-            lastFrameI = frameI
             continue
         currentTree = copy.deepcopy(tree)
 
@@ -1034,8 +1060,11 @@ def drawGuideTree(tree, precision=1, lastProbDicts=[], layerMode=False, normaliz
 
         if len(currentTree) <= 1:
             currentTree = unknownTree
-        if displayTree:  # display as zeroth layer tree
-            exhibitTree = reverseGuideTree(currentTree)
+        if displayTree and frameI == round(frameLen * frameStart):  # display as zeroth layer tree
+            if reverse:
+                exhibitTree = reverseGuideTree(currentTree)  # only needed if the test tree is generated, not handwritten
+            else:
+                exhibitTree = currentTree
             if hollowDyn:
                 exhibitTree = hollowDynamic(exhibitTree)
                 if verbose:
@@ -1050,7 +1079,7 @@ def drawGuideTree(tree, precision=1, lastProbDicts=[], layerMode=False, normaliz
         if len(currentTree) <= 1:
             currentTree = unknownTree
         else:
-            currentTree = ['parallel', currentTree]
+            currentTree = ['parallel', ['series', currentTree]]
         if verbose:
             print('Cleaned Tree', currentTree)
         guideTreeLst.append(currentTree)
@@ -1374,7 +1403,7 @@ def guideTreeHelper(tree, origin, width, height, pixelDict, orient=0, pixelMovem
                         lastPt = startPt
                         closestValid = calcSeq[0]
 
-                    XLst, YLst = approxPos(lastPt, pixelMovements, calcSeq, precision=precision, lastStep=closestValid)
+                    XLst, YLst = approxPos(lastPt, pixelMovements, calcSeq, lastStep=closestValid)
                     # print("cur calc seq", calcSeq)
                     if startPt not in newPtLst:
                         newPtLst[startPt] = (XLst, YLst)
@@ -1433,7 +1462,7 @@ def guideTreeHelper(tree, origin, width, height, pixelDict, orient=0, pixelMovem
         return pixelDict, codeMap, newMoveHist
 
 
-def approxPos(lastPt, pixelMovements, calcSeq, precision, lastStep):  # Euler's method
+def approxPos(lastPt, pixelMovements, calcSeq, lastStep):  # Euler's method
     newX, newY = lastPt
     # print("new x", newX, "new y", newY)
     if pixelMovements is not None:
@@ -1455,6 +1484,12 @@ def approxPos(lastPt, pixelMovements, calcSeq, precision, lastStep):  # Euler's 
         # newX, newY, exceeds = detectExcess(newX, newY, len(pixelMovements[0]) - 1, len(pixelMovements) - 1)
         XLst[lastStep] = newX
         YLst[lastStep] = newY
+    else:
+        XLst = {}  # {moment t -> x at t}
+        YLst = {}  # {moment t -> y at t}
+        for i, step in enumerate(calcSeq):
+            XLst[step] = newX
+            YLst[step] = newY
     return XLst, YLst
 
 
@@ -1503,13 +1538,18 @@ def readVideo(name, jump=1):
     success, image = video.read()
     count = 0
     while success:
-        cv2.imwrite("./images/frames/frame%d.png" % count, image)  # save frame as JPEG file
+        cv2.imwrite("./images/frames/frame %d.png" % count, image)  # save frame as JPEG file
         for i in range(jump):
             success, image = video.read()
         print('Read a new frame: ', success)
         count += jump
     print("Finished reading the video.", count, "frames in total.")
 
+def readGif(name, jump=1):
+    gif = imageio.get_reader('./images/videos/' + name + '.gif')
+    for count in range(0, len(gif), jump):
+        imageio.imsave("./images/frames/frame %d.png" % count, gif.get_data(count))
+    print("Finished reading the gif.", len(gif), "frames in total.")
 
 def frameDif(pixels1, pixels2):
     difPixels = []
@@ -1537,7 +1577,9 @@ def initAxes(showMode=[True, False, True], numAxes=1):  # image, zero layer tree
     curCol = 0
     if showMode[0]:
         for i in range(numAxes):
-            axes.append(fig.add_subplot(gs[i, curCol]))
+            textImgPair = gs[i, curCol].subgridspec(2, 1, height_ratios=[0.2, 0.8])
+            axes.append(fig.add_subplot(textImgPair[0]))  # title
+            axes.append(fig.add_subplot(textImgPair[1]))  # image
         curCol += 1
     if showMode[1]:
         axes.append(fig.add_subplot(gs[:-1, curCol:curCol + 2]))
@@ -1549,33 +1591,46 @@ def initAxes(showMode=[True, False, True], numAxes=1):  # image, zero layer tree
     return fig
 
 
-def initSourceAxes():
+def initSourceAxes(showMode):
     global axes
     global fig
     fig = plt.figure()
     axes = []
-    gs = fig.add_gridspec(2, 2, height_ratios=[0.9, 0.1], width_ratios=[0.3, 0.7])
-    for curRow in [0, 1]:
-        for curCol in [0, 1]:
-            axes.append(fig.add_subplot(gs[curRow, curCol]))
+    print("source show mode", showMode)
+    gs = fig.add_gridspec(2, 1, height_ratios=[0.9, 0.1])
+    upper = gs[0, 0].subgridspec(1, 2, width_ratios=[0.3, 0.7]) if showMode[0] and showMode[2] else None
+    if showMode[0]:
+        if upper is None:
+            upperLeft = gs[0, 0].subgridspec(3, 1, height_ratios=[0.1, 0.8, 0.1])
+        else:
+            upperLeft = upper[0].subgridspec(3, 1, height_ratios=[0.1, 0.8, 0.1])
+        axes.append(fig.add_subplot(upperLeft[0]))
+        axes.append(fig.add_subplot(upperLeft[1]))
+    if showMode[2]:
+        if upper is None:
+            upperRight = gs[0, 0].subgridspec(2, 1, height_ratios=[0.9, 0.1])
+        else:
+            upperRight = upper[1].subgridspec(2, 1, height_ratios=[0.9, 0.1])
+        axes.append(fig.add_subplot(upperRight[0]))
+        upperRightButtons = upperRight[1].subgridspec(1, 2, width_ratios=[0.5, 0.5])
+        axes.append(fig.add_subplot(upperRightButtons[0]))
+        axes.append(fig.add_subplot(upperRightButtons[1]))
+
+    lower = gs[1, 0].subgridspec(1, 3, width_ratios=[0.3, 0.4, 0.3])
+    axes.append(fig.add_subplot(lower[0]))
+    axes.append(fig.add_subplot(lower[1]))
+    axes.append(fig.add_subplot(lower[2]))
+
     return fig
 
 
-def initFrame():
-    global axes
-    axes[0].set_title("Simulated Layer")
-    axes[0].axis('on')
-    return axes[0]
-
-
 # Function to update the animation at each frame
-def updateFrame(frame, frames, numAxes, maxLayer):
-    axes[numAxes].clear()  # Clear previous frame's content
-    axes[numAxes].imshow(frames[frame], cmap='gray', vmin=0, vmax=255)  # Display new frame's content
-    axes[numAxes].set_title("Simulated Layer " + str(maxLayer - numAxes))
-    axes[numAxes].axis('on')
-    axes[numAxes].tick_params(left=False, right=False, labelleft=False, labelbottom=False)
-    return [axes[numAxes]]
+def updateFrame(frame, frames, numAxes):
+    axes[numAxes + 1].clear()  # Clear previous frame's content
+    axes[numAxes + 1].imshow(frames[frame], cmap='gray', vmin=0, vmax=255)  # Display new frame's content
+    axes[numAxes + 1].axis('on')
+    axes[numAxes + 1].tick_params(left=False, right=False, labelleft=False, labelbottom=False)
+    return [axes[numAxes], axes[numAxes + 1]]
 
 
 def playFrames(frames, numAxes, maxLayer):
@@ -1584,10 +1639,11 @@ def playFrames(frames, numAxes, maxLayer):
     # print('len frames', len(frames))
     #for frame in frames:
     #    axes[numAxes].imshow(frame)
-
-    ani = animation.FuncAnimation(fig, updateFrame, frames=len(frames), fargs=(frames, numAxes, maxLayer),
+    axes[numAxes].axis("off")
+    axes[numAxes].text(0.5, 0.5, "Simulated Layer " + str(int(maxLayer - numAxes / 2)), ha='center', va='center', fontsize=10, family='sans-serif')
+    ani = animation.FuncAnimation(fig, updateFrame, frames=len(frames), fargs=(frames, numAxes),
                                   init_func=None,
-                                  blit=False, interval=10)
+                                  blit=True, interval=20)
 
     return ani
 
@@ -1603,7 +1659,6 @@ def calcLayered(guideTrees, normalize=True, layerMode=True, keyLen=20, reverse=T
         if reverse:
             guideTree = reverseGuideTree(guideTree)
         layerLst = getAllLayers(guideTree)
-
         if needZero:  # optimize layer calculation by omitting incontinuous layers
             layerSetDif = set(range(min(layerLst), max(layerLst) + 1)).difference(set(layerLst))
             if layerSetDif == set():
@@ -1630,7 +1685,6 @@ def calcLayered(guideTrees, normalize=True, layerMode=True, keyLen=20, reverse=T
                         print('Filled Tree', filledTree)
                 else:
                     filledTree = copy.deepcopy(guideTree)
-                    print("original tree", filledTree)
                 layerTrees[layer] = \
                     filterLayer(filledTree, layer, codeMode=True, mirrorMode=mirrorMode, verbose=verbose)[0]
                 if verbose:
@@ -1676,10 +1730,11 @@ def calcLayered(guideTrees, normalize=True, layerMode=True, keyLen=20, reverse=T
                                                                                 verbose=verbose, elongated=elongated,
                                                                                 frameStart=frameStart,
                                                                                 frameDiv=frameDiv,
-                                                                                moveHistDict=moveHistDict)
+                                                                                moveHistDict=moveHistDict,
+                                                                                reverse=reverse)
                 moveHistDict |= newMoveHistDict
                 if layer == 0 and needZero:
-                    zeroLayerTrees += guideTreeLst
+                    zeroLayerTrees += [['parallel', cleanGuideTree(removeVoid(tree))] for tree in guideTreeLst]
                 try:
                     videos[layer] += video
                 except KeyError:
@@ -1711,41 +1766,75 @@ def calcLayered(guideTrees, normalize=True, layerMode=True, keyLen=20, reverse=T
         return videos, layerLst
 
 
-def initButtons(zeroGraphs, startAx, replaceText=True, videos=None, useSymbols=False):
+def initButtons(zeroGraphs, startAx, replaceText=True, videos=None, useSymbols=False, isSource=False):
     global axPrev
     global axNext
-    global buttonPrev
-    global buttonNext
+    global buttonPrevTree
+    global buttonNextTree
+    global buttonPrevSeq
+    global buttonNextSeq
     global curGalleryInd
+    global curSeqInd
     global numGallery
     global axes
     curGalleryInd = 0
-    numGallery = len(zeroGraphs)
+    curSeqInd = 0
+    if zeroGraphs is not None:
+        if isinstance(zeroGraphs[0], list):
+            numSeq = len(zeroGraphs)
+            numGallery = len(zeroGraphs[0])
+        else:
+            numGallery = len(zeroGraphs)
+    else:
+        numSeq = len(videos)
     arrowPrevImg = imread('./images/arrowPrev.png')  # Replace with your arrow image file
     arrowNextImg = imread('./images/arrowNext.png')
-    buttonPrev = Button(axes[startAx + 1], '', image=arrowPrevImg)
-    buttonNext = Button(axes[startAx + 2], '', image=arrowNextImg)
 
-    buttonPrev.on_clicked(lambda event: updateGallery((curGalleryInd - 1) % numGallery, zeroGraphs, startAx,
-                                                      replaceText=replaceText, videos=videos, useSymbols=useSymbols))
-    buttonNext.on_clicked(lambda event: updateGallery((curGalleryInd + 1) % numGallery, zeroGraphs, startAx,
-                                                      replaceText=replaceText, videos=videos, useSymbols=useSymbols))
+    if not isSource or zeroGraphs is not None:
+        buttonPrevTree = Button(axes[startAx + 1], '', image=arrowPrevImg)
+        buttonNextTree = Button(axes[startAx + 2], '', image=arrowNextImg)
+        buttonPrevTree.on_clicked(lambda event: updateGallery((curGalleryInd - 1) % numGallery, zeroGraphs, startAx,
+                                                          replaceText=replaceText, useSymbols=useSymbols))
+        buttonNextTree.on_clicked(lambda event: updateGallery((curGalleryInd + 1) % numGallery, zeroGraphs, startAx,
+                                                          replaceText=replaceText, useSymbols=useSymbols))
+    if isSource:
+        buttonPrevSeq = Button(axes[startAx + 3], '', image=arrowPrevImg)
+        axes[startAx + 4].axis("off")
+        axes[startAx + 4].text(0.5, 0.5, 'Sequence ' + str(curSeqInd), ha='center', va='center', fontsize=12)
+        buttonNextSeq = Button(axes[startAx + 5], '', image=arrowNextImg)
+
+        buttonPrevSeq.on_clicked(lambda event: updateGallery((curSeqInd - 1) % numSeq, zeroGraphs, startAx,
+                                                          replaceText=replaceText, videos=videos, useSymbols=useSymbols, changeSeq=True))
+        buttonNextSeq.on_clicked(lambda event: updateGallery((curSeqInd + 1) % numSeq, zeroGraphs, startAx,
+                                                          replaceText=replaceText, videos=videos, useSymbols=useSymbols, changeSeq=True))
 
 
-def updateGallery(index, zeroGraphs, startAx, replaceText=True, videos=None, useSymbols=False):
+def updateGallery(index, zeroGraphs, startAx, replaceText=True, videos=None, useSymbols=False, changeSeq=False):
     global axes
     global curGalleryInd
+    global curSeqInd
     global ani
     global textProps
-    curGalleryInd = index
-
-    axes[startAx].cla()  # Clear the current axes
-    drawNetwork(zeroGraphs[index], startAx, replaceText, useSymbols)
-    axes[startAx].set_title('Zeroth Layer ' + str(index + 1) + '/' + str(len(zeroGraphs)))
+    if changeSeq:
+        curSeqInd = index
+        axes[startAx + 4].cla()
+        axes[startAx + 4].axis("off")
+        axes[startAx + 4].text(0.5, 0.5, 'Sequence ' + str(curSeqInd), ha='center', va='center', fontsize=12)
+    else:
+        curGalleryInd = index
+    if zeroGraphs is not None:
+        axes[startAx].cla()
+        if isinstance(zeroGraphs[0], list):
+            drawNetwork(zeroGraphs[curSeqInd][curGalleryInd], startAx, replaceText, useSymbols)
+            axes[startAx].set_title('Zeroth Layer ' + str(curGalleryInd + 1) + '/' + str(len(zeroGraphs[0])))
+        else:
+            drawNetwork(zeroGraphs[curGalleryInd], startAx, replaceText, useSymbols)
+            axes[startAx].set_title('Zeroth Layer ' + str(curGalleryInd + 1) + '/' + str(len(zeroGraphs)))
     if videos is not None:
+        axes[0].clear()
         axes[0].cla()  # Clear the current axes
         ani[0] = None
-        ani[0] = playFrames(videos[index], 0, 0)
+        ani[0] = playFrames(videos[curSeqInd], 0, 0)
     plt.ion()
 
 
@@ -1842,25 +1931,26 @@ def playLayered(videos, layerLst=[0], showMode=[True, False, True], isSource=Fal
     global fig
     layerLst = sorted(set(layerLst))
     if mirrorMode:
-        layerLst = [val for val in layerLst if val <= 0]
+        layerLst = [val for val in layerLst if val <= 0] if any([val for val in layerLst if val <= 0]) else layerLst
     if isSource:
-        fig = initSourceAxes()
+        fig = initSourceAxes(showMode=showMode)
     else:
         fig = initAxes(showMode=showMode, numAxes=max(layerLst) + 1 - min(layerLst))
 
-    layerNum = max(layerLst) + 1 - min(layerLst)
-    ani = []
-    for i in range(layerNum):
-        ani.append(None)
-    for i in range(layerNum):
-        # Create an empty image plot for the first animation
-        # im1 = gridAx.imshow(videos[layer][0], animated=True)
-        # print(mirrorMode, layerNum, layerLst, layerNum - 1 - i, ani, len(videos))
-        for j, frame in enumerate(videos[i]):
-            frame.save('./images/results/simulations/layer ' + str(layerLst[i]) + ' - ' + str(j) + '.png')
-        gifPath = './images/results/simulations/layer ' + str(layerLst[i]) + '.gif'
-        videos[i][0].save(gifPath, save_all=True, append_images=videos[i][1:], loop=0, duration=50)
-        ani[layerNum - 1 - i] = playFrames(videos[i], layerNum - 1 - i, max(layerLst))
+    if showMode[0]:
+        layerNum = max(layerLst) + 1 - min(layerLst)
+        ani = []
+        for i in range(layerNum):
+            ani.append(None)
+        for i in range(layerNum):
+            # Create an empty image plot for the first animation
+            # im1 = gridAx.imshow(videos[layer][0], animated=True)
+            # print(mirrorMode, layerNum, layerLst, layerNum - 1 - i, ani, len(videos))
+            for j, frame in enumerate(videos[i]):
+                frame.save('./images/results/simulations/layer ' + str(layerLst[i]) + ' - ' + str(j) + '.png')
+            gifPath = './images/results/simulations/layer ' + str(layerLst[i]) + '.gif'
+            videos[i][0].save(gifPath, save_all=True, append_images=videos[i][1:], loop=0, duration=50)
+            ani[layerNum - 1 - i] = playFrames(videos[i], (layerNum - 1 - i) * 2, max(layerLst))
 
 
 def flattenLists(nestedLst):
@@ -1885,36 +1975,46 @@ def main():
 
     txt = "éznịt hai'ih ĩneáboboż"
     # txt = "e'eházahrịto'i'ehano'i'etano'a'ébebożịho'"
-    txt = "e'ehito'ia'ézrịho'ai'etano'a'ébebożịho'"
+    txt = "miṡõi'ic ẽmilõi'ih otah."
     # txt = "ĩmiatiamm"
     # txt = "ưcun'ĩbadago'"
+
     '''
     longGuideTree = ItiParser.read(txt, guideMode=True)[0]
     for guideTree in longGuideTree:
-        playLayered(['parallel', guideTree], showMode=[True, False, False], normalize=True)
+        print(guideTree)
+        guideTree = ['parallel', guideTree]
+        videos, layerLst = calcLayered(guideTree, normalize=True, reverse=False, verbose=True, keyLen=7, elongated=2,
+                                       fillDyn=True, mirrorMode=True, precision=5)
+        playLayered(videos, layerLst, showMode=[True, False, False], mirrorMode=True)
         plt.show()
     '''
 
-    sourceTrees = demoBackups.periodicity
-    # sourceTrees = ['parallel', ['series', ['parallel', ['series', ['t', 1, -2]], ['series', ['ṡ', 0, -2]]]]]
-    videos, layerLst = calcLayered(sourceTrees, normalize=True, reverse=False, verbose=True, keyLen=7, elongated=2,
-                                   fillDyn=False, mirrorMode=True, precision=5)
-    playLayered(videos, layerLst, showMode=[True, False, False], mirrorMode=True)
+    # sourceTrees = demoBackups.periodicity
+    #sourceTrees = ['parallel', ['series', ['parallel', ['series', ['t', 1, -1], ['r', 0, 0]]], ['parallel', ['series', ['c', 1, -2, [0, 0]]], ['series', ['b', 0, 0, [0, 0]]]]]]
+    #sourceTrees = demoBackups.notOp
+    sourceTrees = demoBackups.revolve
+    #sourceTrees = ['parallel', ['series', ['parallel', ['series', ['l', 0, -1]], ['series', ['m', 0, 0]]]]]
+    # sourceTrees = ['parallel', ['series', ['ṡ', 1, 0], ['ṡ', 1, 0], ['ṡ', 1, 0]], ['series', ['l', 0, 0]]]
+    videos, layerLst = calcLayered(sourceTrees, normalize=True, reverse=False, verbose=True, keyLen=10, elongated=4,
+                                   fillDyn=False, mirrorMode=True, precision=4)
+    playLayered(videos, layerLst, showMode=[True, False, True], mirrorMode=True)
     plt.show()
 
-    # readVideo('irrigate', jump=10)
+    readGif('revolve', jump=2)
     pixels = None
     lastPixels = [None, None, None] if colorMode else [None]
-    frameJump = 1
+    frameJump = 2
     resultGuideTreeCollection = []
-    for frameNum in range(3, 7, frameJump):
-        image = Image.open(r"./images/frames/char" + str(frameNum) + ".png")
+    for frameNum in range(0, 40, frameJump):
+        image = Image.open(r"./images/frames/frame " + str(frameNum) + ".png")
         # detectContour(image)
         # sourceImages = [detectEdge(image, useCanny=True)]
         # sourceImages = [Image.fromarray(cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY))]
-        sourceImages = extractChannels(image) if colorMode else [
-            Image.fromarray(cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY))]
-        # sourceImages = [image.convert('L')]
+        #sourceImages = extractChannels(image) if colorMode else [
+        #    Image.fromarray(cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY))]
+        # sourceImages = [image]
+        sourceImages = [image.convert('L')]
         resultImages = []
         resultVideos = []
         resultGuideTrees = []
