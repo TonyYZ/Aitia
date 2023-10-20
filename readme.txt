@@ -1,0 +1,4 @@
+imageProcessing.py 将图像划分格子，横三分竖三分往复分割，格线为了提高卦气概率可以灵活变动，最后得出卦气分布。还可以反向输出图像。
+interpreter.py 用iti作为可变动格线的框架去套图像，用动态元素按照扩散方程去演化，计算该框架能产出该图像序列的概率
+diffusionSimulation.py 用扩散方程的差分方法模拟卦象演化
+bayesianLearning.py
