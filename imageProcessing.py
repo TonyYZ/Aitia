@@ -324,7 +324,6 @@ def splitImage(pixels, origin, depth=0, flow=None, bothOrient=False, flexible=Tr
             for j in range(round(division * i), round(division * (i + 1))):
                 pixelDict += pixels[j]
             pixelLens.append(len(pixelDict))
-            print("pixel dict", pixelDict)
             pixelSums[i] = sum(pixelDict)
         results = getScore(pixelSums=pixelSums, pixelLens=pixelLens, verbose=True)
         score = results[0]
@@ -670,7 +669,7 @@ def drawLabels(image, tree, allTrees=False):
 def labelHelper(image, tree, allTrees):
     global colorA
     global colorB
-    size = 32
+    size = 128
     if not tree:
         return None
     unicodeFont = ImageFont.truetype("Dengl.ttf", size)
@@ -1990,6 +1989,7 @@ def main():
         plt.show()
     '''
 
+    '''
     # sourceTrees = demoBackups.periodicity
     #sourceTrees = ['parallel', ['series', ['parallel', ['series', ['t', 1, -1], ['r', 0, 0]]], ['parallel', ['series', ['c', 1, -2, [0, 0]]], ['series', ['b', 0, 0, [0, 0]]]]]]
     #sourceTrees = demoBackups.notOp
@@ -2000,21 +2000,23 @@ def main():
                                    fillDyn=False, mirrorMode=True, precision=4)
     playLayered(videos, layerLst, showMode=[True, False, True], mirrorMode=True)
     plt.show()
-
+    
     readGif('revolve', jump=2)
+    '''
     pixels = None
     lastPixels = [None, None, None] if colorMode else [None]
-    frameJump = 2
+    frameJump = 1
     resultGuideTreeCollection = []
-    for frameNum in range(0, 40, frameJump):
-        image = Image.open(r"./images/frames/frame " + str(frameNum) + ".png")
+    for frameNum in range(0, 1, frameJump):
+        image = Image.open(r"./images/frames/room1.jpg")
+        # image = Image.open(r"./images/frames/frame " + str(frameNum) + ".png")
         # detectContour(image)
         # sourceImages = [detectEdge(image, useCanny=True)]
-        # sourceImages = [Image.fromarray(cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY))]
+        sourceImages = [Image.fromarray(cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY))]
         #sourceImages = extractChannels(image) if colorMode else [
         #    Image.fromarray(cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY))]
         # sourceImages = [image]
-        sourceImages = [image.convert('L')]
+        # sourceImages = [image.convert('L')]
         resultImages = []
         resultVideos = []
         resultGuideTrees = []
@@ -2026,7 +2028,7 @@ def main():
             width, height = image.size
             pixels = [pixels[i * width:(i + 1) * width] for i in range(height)]
             if staticMode:
-                rays, tree = splitImage(pixels, (0, 0), bothOrient=True, flexible=False)
+                rays, tree = splitImage(pixels, (0, 0), bothOrient=True, flexible=True)
                 print('rays', rays)
                 print('tree', tree)
                 treeImage = drawTree(tree)
