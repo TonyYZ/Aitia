@@ -1,13 +1,16 @@
 import math
 import sys
+from random import random
 
 import cv2
+
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image, ImageFilter, ImageDraw, ImageFont
 from matplotlib import animation
 
-sys.path.append('D:/Project/Ete/ReEte')
+# sys.path.append('D:/Project/Ete/ReEte')
+sys.path.append('/home/ukiriz/Ete')
 import copy
 from line_profiler import LineProfiler
 from matplotlib.widgets import Button
@@ -18,11 +21,12 @@ import demoBackups
 import ItiParser
 import imageio
 
-fontNames = ['Yu Gothic', 'Segoe UI Symbol']
+# fontNames = ['Yu Gothic', 'Segoe UI Symbol']
+fontNames = ['Noto Sans CJK JP', 'Noto Sans CJK JP']
 
 profiler = LineProfiler()
 
-depthMax = 2
+depthMax = 1
 punishment = 5  # punishment factor to simple hexagrams (0, 0, 0), (0.5, 0.5, 0.5), (1, 1, 1)
 punishmentDyn = 2
 hexMap = {'坤卦': (0, 0, 0), '艮卦2': (1, 0, 0), '艮卦': (1, 0, 0), '坎卦': (0, 1, 0), '巽卦': (1, 1, 0),
@@ -55,8 +59,8 @@ dynMap = {0: '靜', 1: '動'}
 leafSymbols = list(reversedCharMapDbl.keys())
 nodeSymbols = ['parallel', 'series']
 replaceDict = {'parallel': '并', 'series': '串'}
-staticMode = True
-dynamicMode = False
+staticMode = False
+dynamicMode = True
 colorMode = False
 colorA = (255, 0, 0)
 colorB = (0, 200, 200)
@@ -88,15 +92,16 @@ def detectFlow(prevFrame, curFrame):
     return flow
 
 
-def visualizeFlow(image, flow, step=16, scale=5):
+def visualizeFlow(image, flow, step=16, arrowScale=5, scaleFactor=1):
     image = image.convert('RGB')
     image = np.array(image)
     h, w = flow.shape[:2]
     y, x = np.mgrid[step // 2:h:step, step // 2:w:step].reshape(2, -1).astype(int)
-    fx, fy = flow[y, x].T * scale
+    fx, fy = flow[y, x].T * arrowScale
     lines = np.vstack([x, y, x + fx, y + fy]).T.reshape(-1, 2, 2)
     lines = np.int32(lines + 0.5)
     for (x1, y1), (x2, y2) in lines:
+        x1, y1, x2, y2 = x1 * scaleFactor, y1 * scaleFactor, x2 * scaleFactor, y2 * scaleFactor
         cv2.arrowedLine(image, (x1, y1), (x2, y2), (0, 255, 0), 1)
         cv2.circle(image, (x2, y2), 1, (0, 255, 0), -1)
     return Image.fromarray(image)
@@ -207,7 +212,8 @@ def getScore(pixelSums=None, pixelLens=None, flowSums=None, flowAbsSums=None, ve
             else:
                 ratio = pixelSums[i] / maxSums[i]
             # print("ratio", ratio, pixelSums[i], maxSums[i])
-            k = 1.5
+            # k = 0.3  # detected contours
+            k = 1  # gray image
             sensations[i] = math.sqrt(1 - math.pow(ratio - k, 2) / math.pow(k, 2))
             if sensations[i] > 1:
                 sensations[i] = 1
@@ -285,7 +291,7 @@ def getVariance(lst):
     return lstSum / len(lst)
 
 
-def splitImage(pixels, origin, depth=0, flow=None, bothOrient=False, flexible=True):
+def splitImage(pixels, origin, depth=0, flow=None, bothOrient=False, flexible=True, buddhist=False):
     global depthMax
     width = len(pixels[0])
     height = len(pixels)
@@ -422,6 +428,9 @@ def splitImage(pixels, origin, depth=0, flow=None, bothOrient=False, flexible=Tr
                         division = measureA / 2
                         while True:
                             position = round(division) + newDynOffset + moveDir * int(moveDir == -1)
+                            if position >= len(flow):
+                                break
+                            print("position", position, "len", len(flow))
                             flowNum = sum([tup[1 - orient] for tup in flow[position]])
                             flowAbsNum = sum([abs(tup[1 - orient]) for tup in flow[position]])
                             deltaFlowSums = flowNum * moveDir
@@ -510,8 +519,13 @@ def splitImage(pixels, origin, depth=0, flow=None, bothOrient=False, flexible=Tr
             if flow is not None:
                 rays[curOrient] += [[(origin[0], origin[1] + height / 2 + bestDynOffsets[curOrient]),
                                      (origin[0] + len(tPixels), origin[1] + height / 2 + bestDynOffsets[curOrient])]]
-            tree[curOrient] = [(origin[0] + width / 2, origin[1] + height / 2),
-                               (bestHex[curOrient], bestDynHex[curOrient])]
+            hexTup = [bestHex[curOrient], bestDynHex[curOrient]]
+            if not buddhist:  # takes into account of the default evenness & stillness
+                if hexTup[0] == (0.5, 0.5, 0.5):
+                    hexTup[0] = []
+                if hexTup[1] == (0, 0, 0):
+                    hexTup[1] = []
+            tree[curOrient] = [(origin[0] + width / 2, origin[1] + height / 2), tuple(hexTup)]
             if depth < depthMax:
                 results = []
                 for i in range(3):
@@ -537,7 +551,7 @@ def splitImage(pixels, origin, depth=0, flow=None, bothOrient=False, flexible=Tr
                                               depth=depth + 1,
                                               flow=subFlow,
                                               bothOrient=bothOrient,
-                                              flexible=flexible))
+                                              flexible=flexible, buddhist=buddhist))
                 print('results', results, bestHex)
                 if (results[0] == [] or results[0][1][0] == [] or not bestHex[0] == results[0][1][0][1]) or \
                         (results[1] == [] or results[1][1][0] == [] or not bestHex[0] == results[1][1][0][1]) or \
@@ -572,8 +586,13 @@ def splitImage(pixels, origin, depth=0, flow=None, bothOrient=False, flexible=Tr
             if flow is not None:
                 rays[curOrient] += [[(origin[0] + width / 2 + bestDynOffsets[curOrient], origin[1]),
                                      (origin[0] + width / 2 + bestDynOffsets[curOrient], origin[1] + len(tPixels[0]))]]
-            tree[curOrient] = [(origin[0] + width / 2, origin[1] + height / 2),
-                               (bestHex[curOrient], bestDynHex[curOrient])]
+            hexTup = [bestHex[curOrient], bestDynHex[curOrient]]
+            if not buddhist:
+                if hexTup[0] == (0.5, 0.5, 0.5):
+                    hexTup[0] = []
+                if hexTup[1] == (0, 0, 0):
+                    hexTup[1] = []
+            tree[curOrient] = [(origin[0] + width / 2, origin[1] + height / 2), tuple(hexTup)]
             if depth < depthMax:
                 results = []
                 for i in range(3):
@@ -603,7 +622,7 @@ def splitImage(pixels, origin, depth=0, flow=None, bothOrient=False, flexible=Tr
                                               depth=depth + 1,
                                               flow=subFlow,
                                               bothOrient=bothOrient,
-                                              flexible=flexible))
+                                              flexible=flexible, buddhist=buddhist))
                 print(results, bestHex)
                 if (results[0] == [] or results[0][1][1] == [] or not bestHex[1] == results[0][1][1][1]) or \
                         (results[1] == [] or results[1][1][1] == [] or not bestHex[1] == results[1][1][1][1]) or \
@@ -643,7 +662,7 @@ def produceDense():
     # detectEdge(random_image, useCanny=True)
 
 
-def drawRays(image, rays):
+def drawRays(image, rays, scaleFactor=1):
     global colorA
     global colorB
     rgbImage = image.convert('RGB')
@@ -651,28 +670,30 @@ def drawRays(image, rays):
     for orient in [0, 1]:
         branch = rays[orient]
         for ray in branch:
+            newRay = [(ray[0][0] * scaleFactor, ray[0][1] * scaleFactor),
+                      (ray[1][0] * scaleFactor, ray[1][1] * scaleFactor)]
             if ray[0][0] == ray[1][0]:
                 color = colorB
             if ray[0][1] == ray[1][1]:
                 color = colorA
-            rayImage.line(ray, fill=color, width=0)
+            rayImage.line(newRay, fill=color, width=0)
     return rgbImage
 
 
-def drawLabels(image, tree, allTrees=False):
+def drawLabels(image, tree, allTrees=False, scaleFactor=1):
     rgbImage = image.convert('RGB')
     labelImage = ImageDraw.Draw(rgbImage)
-    labelHelper(labelImage, tree, allTrees)
+    labelHelper(labelImage, tree, allTrees, scaleFactor=scaleFactor)
     return rgbImage
 
 
-def labelHelper(image, tree, allTrees):
+def labelHelper(image, tree, allTrees, scaleFactor=1):
     global colorA
     global colorB
-    size = 128
+    size = 50
     if not tree:
         return None
-    unicodeFont = ImageFont.truetype("Dengl.ttf", size)
+    unicodeFont = ImageFont.truetype("uming.ttc", size)
     for orient in [0, 1]:
         branch = tree[orient]
         if not branch:
@@ -680,6 +701,8 @@ def labelHelper(image, tree, allTrees):
         dynamicExists = branch[1][1] is not None
 
         for i, isDynamic in enumerate([False, True]):
+            if not branch[1][i]:
+                continue
             if dynamicExists:
                 shiftX = -1 if isDynamic is False else 1
                 wordLen = 2.5
@@ -689,18 +712,20 @@ def labelHelper(image, tree, allTrees):
                 shiftX = 0
                 wordLen = 1.5
             shiftY = -0.5 if orient == 0 else 0.5
-            coord = (branch[0][0] - size * wordLen / 2 + size * shiftX, branch[0][1] + size * shiftY)
+            coord = ((branch[0][0] + size / scaleFactor * wordLen / 2 * shiftX) * scaleFactor,
+                     (branch[0][1] + size / scaleFactor * shiftY) * scaleFactor)
             if len(branch) == 2 or allTrees:
                 if not orient:
                     color = colorA
                 else:
                     color = colorB
                 hexName = reversedHexMap[tuple(branch[1][i])][0]
+                # print('thar barr', branch, isDynamic, hexName + dynMap[i] * dynamicExists + dimMap[orient], branch[0], size / scaleFactor * wordLen / 2 * shiftX)
                 # print(hexName)
                 image.text(coord, hexName + dynMap[i] * dynamicExists + dimMap[orient], font=unicodeFont, fill=color)
             if len(branch) > 2:
                 for subtree in branch[2:]:
-                    labelHelper(image, subtree, allTrees)
+                    labelHelper(image, subtree, allTrees, scaleFactor=scaleFactor)
 
 
 def drawTree(tree):
@@ -727,7 +752,7 @@ def treeHelper(tree, origin, width, height, pixels):
     # print(tree, origin, width, height, pixels)
     for orient in [0, 1]:
         branch = tree[orient]
-        if not branch:
+        if not branch or not branch[1][0]:
             continue
         if orient == 0:
             for i in range(3):
@@ -759,9 +784,9 @@ def convert2GuideTree(tree):
             continue
         guideBranch = []
         for i, isDynamic in enumerate([False, True]):
-            referent = charMapDyn if isDynamic else charMap
-            if branch[1][i] is None:
+            if not branch[1][i] or branch[1][i] is None:
                 continue
+            referent = charMapDyn if isDynamic else charMap
             char = referent[branch[1][i]]
             guideBranch.append(['series', [char, 1 - orient, 0]])
         compLst = []
@@ -770,18 +795,23 @@ def convert2GuideTree(tree):
                 if not comp:
                     continue
                 subTree = convert2GuideTree(comp)
-                if subTree[0] == 'series':
-                    subTree = subTree[1:]
-                    compLst += subTree
-                else:
-                    compLst.append(subTree)
-            guideBranch.append(['series'] + compLst)
-        if len(guideBranch) > 1:
-            guideBranch = ['parallel'] + guideBranch
+                if subTree:
+                    if subTree[0] == 'series':
+                        subTree = subTree[1:]
+                        compLst += subTree
+                    else:
+                        compLst.append(subTree)
+            if compLst:
+                guideBranch.append(['series'] + compLst)
+        if not guideBranch:
+            continue
+        elif len(guideBranch) > 1:
+            guideTree.append(['series', ['parallel'] + guideBranch])
         else:
-            guideBranch = guideBranch[0]
-        guideTree.append(['series', guideBranch])
-    if len(guideTree) > 1:
+            guideTree.append(guideBranch[0])
+    if not guideTree:
+        return []
+    elif len(guideTree) > 1:
         guideTree = ['parallel'] + guideTree
     else:
         guideTree = guideTree[0]
@@ -791,15 +821,21 @@ def convert2GuideTree(tree):
 def reverseGuideTree(guideTree):
     comps = guideTree[1:]
     if guideTree[0] == 'series':
-        guideTree = ['series'] + comps[::-1]
-
-    if guideTree[0] in ['series', 'parallel']:
+        newGuideTree = ['series'] + comps[::-1]
+        for i in range(len(comps)):
+            if newGuideTree[1 + i] == 'filler':
+                continue
+            newGuideTree[1 + i] = reverseGuideTree(newGuideTree[1 + i])
+    elif guideTree[0] == 'parallel':
+        newGuideTree = ['parallel']
         for i in range(len(comps)):
             if guideTree[1 + i] == 'filler':
                 continue
-            guideTree[1 + i] = reverseGuideTree(guideTree[1 + i])
+            newGuideTree.append(reverseGuideTree(guideTree[1 + i]))
+    else:
+        newGuideTree = guideTree.copy()
 
-    return guideTree
+    return newGuideTree
 
 
 def isPair(lst):
@@ -922,7 +958,7 @@ def fillDynamic(guideTree):
                         newGuideTree[i][j] = ['parallel', ['series', newGuideTree[i][j]],
                                               ['series', ['ṡ', newGuideTree[i][j][1], newGuideTree[i][j][2]]], 'filler']
     else:
-        newGuideTree = guideTree
+        newGuideTree = guideTree.copy()
         hasStatic = [guideTree[2]] * int(guideTree[0] in reversedCharMap)
     return newGuideTree, hasStatic
 
@@ -944,7 +980,7 @@ def hollowDynamic(guideTree):
                 newGuideTree.append(result)
         return newGuideTree
     else:
-        return guideTree
+        return guideTree.copy()
 
 
 def removeVoid(guideTree):
@@ -962,7 +998,7 @@ def removeVoid(guideTree):
         for comp in guideTree[1:]:
             newGuideTree.append(removeVoid(comp))
     else:
-        newGuideTree = guideTree
+        newGuideTree = guideTree.copy()
 
     return newGuideTree
 
@@ -1009,13 +1045,13 @@ def countBranch(tree):
 
 
 def drawGuideTree(tree, precision=1, lastProbDicts=[], layerMode=False, normalize=True, verbose=False,
-                  hollowDyn=False, elongated=1, frameStart=0, frameDiv=1, moveHistDict=None, displayTree=False, reverse=True):
+                  hollowDyn=False, acceleration=1, frameStart=0, frameDiv=1, moveHistDict=None, displayTree=False, reverse=True):
     # precision means the divisor of the frame gap between each coordinate update
     global depthMax
     global unknownTree
     # width = height = round(math.pow(3, math.ceil(countDepth(tree) / 2) + 1))
     width = height = countBranch(tree)
-    frameLen = round(width * elongated / frameDiv * (frameStart + 1)) - round(width * elongated / frameDiv * frameStart)
+    frameLen = round(width * acceleration / frameDiv * (frameStart + 1)) - round(width * acceleration / frameDiv * frameStart)
     if frameLen == 0 or frameLen == 1:
         frameLen = 2
     frameLst = []
@@ -1036,8 +1072,7 @@ def drawGuideTree(tree, precision=1, lastProbDicts=[], layerMode=False, normaliz
             framePrecI += frameLen / precision
             frameI = round(framePrecI)
             continue
-        currentTree = copy.deepcopy(tree)
-
+        currentTree = tree
         if verbose:
             print('Frame Precise I', framePrecI, 'frame I', frameI)
 
@@ -1059,6 +1094,16 @@ def drawGuideTree(tree, precision=1, lastProbDicts=[], layerMode=False, normaliz
 
         if len(currentTree) <= 1:
             currentTree = unknownTree
+
+        currentTree = cleanGuideTree(currentTree, keepCode=True)
+        if len(currentTree) <= 1:
+            currentTree = unknownTree
+        #else:
+        #    currentTree = ['parallel', ['series', currentTree]]
+        if verbose:
+            print('Cleaned Tree', currentTree)
+        guideTreeLst.append(currentTree)
+
         if displayTree and frameI == round(frameLen * frameStart):  # display as zeroth layer tree
             if reverse:
                 exhibitTree = reverseGuideTree(currentTree)  # only needed if the test tree is generated, not handwritten
@@ -1071,17 +1116,9 @@ def drawGuideTree(tree, precision=1, lastProbDicts=[], layerMode=False, normaliz
             exhibitTree = cleanGuideTree(exhibitTree, keepCode=False)
             if len(exhibitTree) <= 1:
                 exhibitTree = unknownTree
-            else:
-                exhibitTree = ['parallel', exhibitTree]
+            #else:
+            #    exhibitTree = ['parallel', exhibitTree]
             exhibitTreeLst.append(exhibitTree)
-        currentTree = cleanGuideTree(currentTree, keepCode=True)
-        if len(currentTree) <= 1:
-            currentTree = unknownTree
-        else:
-            currentTree = ['parallel', ['series', currentTree]]
-        if verbose:
-            print('Cleaned Tree', currentTree)
-        guideTreeLst.append(currentTree)
         frameILst.append(frameI)
         lastFrameI = frameI
         framePrecI += frameLen / precision
@@ -1225,7 +1262,7 @@ def drawByLots(guideTree, choiceDict):
 
             if not choice:
                 return []
-        return guideTree
+        return guideTree.copy()
 
 
 def cleanGuideTree(guideTree, keepCode=True):  # only complete: only clean the one-element lists
@@ -1261,7 +1298,10 @@ def cleanGuideTree(guideTree, keepCode=True):  # only complete: only clean the o
             else:
                 return []
     else:
-        return guideTree
+        if guideTree == 'filler':
+            return guideTree
+        else:
+            return guideTree.copy()
 
 
 def findTwo(lst):
@@ -1413,9 +1453,9 @@ def guideTreeHelper(tree, origin, width, height, pixelDict, orient=0, pixelMovem
                             fluctuation = np.random.rand() * reversedCharMapDyn[tree[0]][0] * np.random.choice([1, -1])
                             if 0 <= YLst[frameI] < bigHeight and 0 <= XLst[frameI] < bigWidth:
                                 pixelDict[frameI][YLst[frameI]][XLst[frameI]][0] += fluctuation
-                        if tree[0] != 'h':
+                        if tree[0] not in ['h'] + list(reversedCharMapDyn.keys()):
                             if 0 <= YLst[frameI] < bigHeight and 0 <= XLst[frameI] < bigWidth:
-                                pixelDict[frameI][YLst[frameI]][XLst[frameI]][1] += 1
+                                pixelDict[frameI][round(YLst[frameI])][round(XLst[frameI])][1] += 1
                         # print('background', tree, frameI, YLst[frameI], XLst[frameI], pixelDict[frameI][YLst[frameI]][XLst[frameI]])
                 if codeMap is not None:
                     if mapLegend != 0:
@@ -1440,7 +1480,7 @@ def guideTreeHelper(tree, origin, width, height, pixelDict, orient=0, pixelMovem
                             for frameI in calcSeq:
                                 if 0 <= YLst[frameI] < bigHeight and \
                                         0 <= XLst[frameI] < bigWidth:
-                                    pixelDict[frameI][YLst[frameI]][XLst[frameI]][0] += staticPattern[i]
+                                    pixelDict[frameI][round(YLst[frameI])][round(XLst[frameI])][0] += staticPattern[i]
 
                                     # print("figure", tree, frameI, YLst[frameI], XLst[frameI], pixelDict[frameI][YLst[frameI]][XLst[frameI]])
                     else:
@@ -1451,8 +1491,7 @@ def guideTreeHelper(tree, origin, width, height, pixelDict, orient=0, pixelMovem
                                 if 0 <= YLst[frameI] < bigHeight and \
                                         0 <= XLst[frameI] < bigWidth:
                                     # print(moveTup)
-                                    pixelDict[frameI][YLst[frameI]][XLst[frameI]][0] += staticPattern[i]
-
+                                    pixelDict[frameI][round(YLst[frameI])][round(XLst[frameI])][0] += staticPattern[i]
                                     # print("figure", tree, frameI, YLst[frameI], XLst[frameI], pixelDict[frameI][YLst[frameI]][XLst[frameI]])
 
     if needCalc:
@@ -1475,10 +1514,14 @@ def approxPos(lastPt, pixelMovements, calcSeq, lastStep):  # Euler's method
             if exceeds:
                 lastStep = step
                 continue
-            moveTup = pixelMovements[newY][newX]
+            moveTup = pixelMovements[round(newY)][round(newX)]
             # print("move tup", moveTup, newX, newY, step, lastStep)
-            newX += moveTup[1] * (step - lastStep)
-            newY += moveTup[0] * (step - lastStep)
+            deltaNewX = moveTup[1] * (step - lastStep)
+            deltaNewY = moveTup[0] * (step - lastStep)
+            #if newX + deltaNewX == 0 and deltaNewX != 0 or newY + deltaNewY == 0 and deltaNewY != 0:
+            #    print("warning", newX, deltaNewX, newY, deltaNewY, moveTup, step, lastStep)
+            newX += deltaNewX
+            newY += deltaNewY
             lastStep = step
         # newX, newY, exceeds = detectExcess(newX, newY, len(pixelMovements[0]) - 1, len(pixelMovements) - 1)
         XLst[lastStep] = newX
@@ -1568,11 +1611,13 @@ def initAxes(showMode=[True, False, True], numAxes=1):  # image, zero layer tree
     axes = []
     numCol = int(showMode[0]) + int(showMode[1]) * 2 + int(showMode[2])
     sumMode = sum([int(mode) for mode in showMode])
-    widthRatios = [1 / sumMode] * int(showMode[0]) + [0.5 / sumMode] * 2 * int(showMode[1]) + [1 / sumMode] * int(
+    widthRatios = [1 / sumMode / 3] * int(showMode[0]) + [0.5 / sumMode / 2] * 2 * int(showMode[1]) + [1 / sumMode] * int(
         showMode[2])
     realNumAxes = numAxes + 1 if showMode[1] else numAxes  # add the buttons below
     heightRatios = [0.9 / (realNumAxes - 1)] * (realNumAxes - 1) + [0.1] if showMode[1] else [1 / numAxes] * numAxes
     gs = fig.add_gridspec(realNumAxes, numCol, height_ratios=heightRatios, width_ratios=widthRatios)
+
+    fig.subplots_adjust(left=0.05, right=0.95, top=0.9, bottom=0.1, wspace=0.1)
     curCol = 0
     if showMode[0]:
         for i in range(numAxes):
@@ -1597,6 +1642,7 @@ def initSourceAxes(showMode):
     axes = []
     print("source show mode", showMode)
     gs = fig.add_gridspec(2, 1, height_ratios=[0.9, 0.1])
+    fig.subplots_adjust(left=0.05, right=0.95, top=0.9, bottom=0.1, wspace=0.1)
     upper = gs[0, 0].subgridspec(1, 2, width_ratios=[0.3, 0.7]) if showMode[0] and showMode[2] else None
     if showMode[0]:
         if upper is None:
@@ -1648,7 +1694,7 @@ def playFrames(frames, numAxes, maxLayer):
 
 
 def calcLayered(guideTrees, normalize=True, layerMode=True, keyLen=20, reverse=True, needZero=False, verbose=False,
-                fillDyn=True, elongated=1, mirrorMode=True, precision=5):
+                fillDyn=True, acceleration=1, mirrorMode=True, precision=5):
     global unknownTree
     if guideTrees[0] == 'parallel':
         guideTrees = [guideTrees]
@@ -1726,14 +1772,15 @@ def calcLayered(guideTrees, normalize=True, layerMode=True, keyLen=20, reverse=T
                                                                                 normalize=normalize,
                                                                                 displayTree=layer == 0 and needZero,
                                                                                 hollowDyn=fillDyn,
-                                                                                verbose=verbose, elongated=elongated,
+                                                                                verbose=verbose, acceleration=acceleration,
                                                                                 frameStart=frameStart,
                                                                                 frameDiv=frameDiv,
                                                                                 moveHistDict=moveHistDict,
                                                                                 reverse=reverse)
                 moveHistDict |= newMoveHistDict
                 if layer == 0 and needZero:
-                    zeroLayerTrees += [['parallel', cleanGuideTree(removeVoid(tree))] for tree in guideTreeLst]
+                    zeroLayerTrees += [['parallel', cleanGuideTree(tree)] for tree in guideTreeLst]
+                    # zeroLayerTrees += guideTreeLst
                 try:
                     videos[layer] += video
                 except KeyError:
@@ -1799,7 +1846,7 @@ def initButtons(zeroGraphs, startAx, replaceText=True, videos=None, useSymbols=F
     if isSource:
         buttonPrevSeq = Button(axes[startAx + 3], '', image=arrowPrevImg)
         axes[startAx + 4].axis("off")
-        axes[startAx + 4].text(0.5, 0.5, 'Sequence ' + str(curSeqInd), ha='center', va='center', fontsize=12)
+        axes[startAx + 4].text(0.5, 0.5, 'Sequence ' + str(curSeqInd + 1), ha='center', va='center', fontsize=12)
         buttonNextSeq = Button(axes[startAx + 5], '', image=arrowNextImg)
 
         buttonPrevSeq.on_clicked(lambda event: updateGallery((curSeqInd - 1) % numSeq, zeroGraphs, startAx,
@@ -1818,7 +1865,7 @@ def updateGallery(index, zeroGraphs, startAx, replaceText=True, videos=None, use
         curSeqInd = index
         axes[startAx + 4].cla()
         axes[startAx + 4].axis("off")
-        axes[startAx + 4].text(0.5, 0.5, 'Sequence ' + str(curSeqInd), ha='center', va='center', fontsize=12)
+        axes[startAx + 4].text(0.5, 0.5, 'Sequence ' + str(curSeqInd + 1), ha='center', va='center', fontsize=12)
     else:
         curGalleryInd = index
     if zeroGraphs is not None:
@@ -1872,7 +1919,7 @@ def decorateNetwork(graph, replaceText=True, useSymbols=False):
     colorMap = {}
     fontFamily = {}
     labels = {}
-    label2Color = {0: 'mediumseagreen', 1: 'coral', -1: 'blueviolet', -2: 'darkslategrey'}
+    label2Color = {0: 'mediumseagreen', 1: 'coral', 2: 'crimson', -1: 'blueviolet', -2: 'darkslategrey'}
     for tup in graph.nodes(data=True):
         unique = tup[0]  # unique node name
         if isinstance(tup[1]['label'], list):
@@ -1948,7 +1995,7 @@ def playLayered(videos, layerLst=[0], showMode=[True, False, True], isSource=Fal
             for j, frame in enumerate(videos[i]):
                 frame.save('./images/results/simulations/layer ' + str(layerLst[i]) + ' - ' + str(j) + '.png')
             gifPath = './images/results/simulations/layer ' + str(layerLst[i]) + '.gif'
-            videos[i][0].save(gifPath, save_all=True, append_images=videos[i][1:], loop=0, duration=50)
+            videos[i][0].save(gifPath, save_all=True, append_images=videos[i][1:], loop=0, duration=150)
             ani[layerNum - 1 - i] = playFrames(videos[i], (layerNum - 1 - i) * 2, max(layerLst))
 
 
@@ -1983,40 +2030,58 @@ def main():
     for guideTree in longGuideTree:
         print(guideTree)
         guideTree = ['parallel', guideTree]
-        videos, layerLst = calcLayered(guideTree, normalize=True, reverse=False, verbose=True, keyLen=7, elongated=2,
+        videos, layerLst = calcLayered(guideTree, normalize=True, reverse=False, verbose=True, keyLen=7, acceleration=2,
                                        fillDyn=True, mirrorMode=True, precision=5)
         playLayered(videos, layerLst, showMode=[True, False, False], mirrorMode=True)
         plt.show()
     '''
 
-    '''
+    import bayesianLearning as bayes
     # sourceTrees = demoBackups.periodicity
-    #sourceTrees = ['parallel', ['series', ['parallel', ['series', ['t', 1, -1], ['r', 0, 0]]], ['parallel', ['series', ['c', 1, -2, [0, 0]]], ['series', ['b', 0, 0, [0, 0]]]]]]
-    #sourceTrees = demoBackups.notOp
-    sourceTrees = demoBackups.revolve
+    sourceTrees = ['parallel', ['series', ['h', 1, -1]], ['series', ['h', 1, -1]], ['series', ['c', 1, -1], ['parallel', ['series', ['h', 0, -1]], ['series', ['c', 0, -1], ['parallel', ['series', ['c', 1, -1]], ['series', ['t', 0, -1]], ['series', ['c', 1, -1]], ['series', ['t', 0, -1]], ['series', ['h', 0, -1], ['h', 0, -1], ['ṡ', 0, -1], ['h', 0, -1], ['h', 0, -1]], ['series', ['h', 1, -1], ['h', 1, -1], ['ṡ', 1, -1], ['h', 1, -1], ['h', 1, -1]],  ['series', ['g', 0, 0]], ['series', ['r', 1, 0]], ['series', ['c', 1, 0]], ['series', ['c', 0, 0]]],  # state 1
+                ['parallel', ['series', ['t', 1, -1]], ['series', ['t', 0, -1]], ['series', ['t', 1, -1]], ['series', ['t', 0, -1]], ['series', ['g', 1, 0]], ['series', ['r', 0, 0]], ['series', ['c', 1, 0]], ['series', ['t', 0, 0]]], ['t', 0, -1]]],  # state 4
+                ['parallel', ['series', ['h', 0, -1]], ['series', ['c', 0, -1],
+                  ['parallel', ['series', ['c', 1, -1]], ['series', ['c', 0, -1]], ['series', ['c', 1, -1]], ['series', ['c', 0, -1]], ['series', ['d', 1, 0]], ['series', ['r', 0, 0]], ['series', ['c', 0, 0]], ['series', ['t', 1, 0]]],  # state 2
+                  ['parallel', ['series', ['t', 1, -1]], ['series', ['c', 0, -1]], ['series', ['t', 1, -1]], ['series', ['c', 0, -1]], ['series', ['d', 0, 0]], ['series', ['r', 1, 0]], ['series', ['t', 1, 0]], ['series', ['t', 0, 0]]], ['t', 0, -1]]], ['t', 1, -1]  # state 3
+                                                 ]]
+    sourceTrees = demoBackups.orOp
+    #sourceTrees = demoBackups.revolve
+    #sourceTrees = ['parallel', ['series', ['parallel', ['series', ['ż', 1, 0]], ['series', ['ċ', 0, 1]]], ['parallel', ['series', ['n', 0, 1]], ['series', ['n', 1, 0]], ['series', ['p', 1, 0]]], ['parallel', ['series', ['v', 1, 0], ['g', 1, 1]], ['series', ['n', 1, 0], ['r', 0, 1]]]], ['series', ['l', 0, 1]]]
+
     #sourceTrees = ['parallel', ['series', ['parallel', ['series', ['l', 0, -1]], ['series', ['m', 0, 0]]]]]
     # sourceTrees = ['parallel', ['series', ['ṡ', 1, 0], ['ṡ', 1, 0], ['ṡ', 1, 0]], ['series', ['l', 0, 0]]]
-    videos, layerLst = calcLayered(sourceTrees, normalize=True, reverse=False, verbose=True, keyLen=10, elongated=4,
-                                   fillDyn=False, mirrorMode=True, precision=4)
-    playLayered(videos, layerLst, showMode=[True, False, True], mirrorMode=True)
-    plt.show()
+    videos, layerLst, zeroLayerTrees = calcLayered(sourceTrees, normalize=True, reverse=False, needZero=True, keyLen=14, verbose=1 > 2, fillDyn=False, precision=2, acceleration=1)
+    print("videos", videos)
+    print("layer lst", layerLst)
+    print("zero", zeroLayerTrees)
+    graph = nx.DiGraph()
+    labelCounter = {}
+    nodeTree = bayes.convert2NodeTree(sourceTrees, labelCounter=labelCounter, graph=graph)
+    zeroGraphs = []
+    for i in range(len(zeroLayerTrees)):
+        zeroGraphs.append(nx.DiGraph())
+    testNodeCol = [bayes.convert2NodeTree(testTree, graph=zeroGraphs[i]) for i, testTree in enumerate(zeroLayerTrees)]
+    bayes.showPlot(graph=graph, videos=videos, layerLst=layerLst, zeroGraphs=zeroGraphs, replaceText=True, mirrorMode=True, useSymbols=False)
+    #plt.show()
     
     readGif('revolve', jump=2)
-    '''
+
     pixels = None
     lastPixels = [None, None, None] if colorMode else [None]
     frameJump = 1
+    imageSeq = []
     resultGuideTreeCollection = []
-    for frameNum in range(0, 1, frameJump):
-        image = Image.open(r"./images/frames/room1.jpg")
-        # image = Image.open(r"./images/frames/frame " + str(frameNum) + ".png")
+    for frameNum in range(0, 42, frameJump):
+        # image = Image.open(r"./images/frames/umbrella.jpg")
+        # image = Image.open(r"./images/frames/umbrella" + str(frameNum) + ".jpg")
+        image = Image.open(r"./images/frames/layer -1 - " + str(frameNum) + ".png")
         # detectContour(image)
         # sourceImages = [detectEdge(image, useCanny=True)]
-        sourceImages = [Image.fromarray(cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY))]
+        # sourceImages = [Image.fromarray(cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY))]
         #sourceImages = extractChannels(image) if colorMode else [
         #    Image.fromarray(cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY))]
         # sourceImages = [image]
-        # sourceImages = [image.convert('L')]
+        sourceImages = [image.convert('L')]
         resultImages = []
         resultVideos = []
         resultGuideTrees = []
@@ -2034,35 +2099,46 @@ def main():
                 treeImage = drawTree(tree)
                 treeImage.save('./images/results/tree' + str(frameNum) + '-' + str(i) + '.png')
                 resultImages.append(treeImage)
-                image = drawRays(image, rays)
-                image = drawLabels(image, tree, allTrees=True)
+                scaleFactor = 30  # Change this to your desired scale factor
+                image = image.resize((image.size[0] * scaleFactor, image.size[1] * scaleFactor))
+                image = drawRays(image, rays, scaleFactor=scaleFactor)
+                image = drawLabels(image, tree, allTrees=True, scaleFactor=scaleFactor)
                 image.save(r'./images/results/result' + str(frameNum) + '-' + str(i) + '.png')
                 guideTree = convert2GuideTree(tree)
+                if guideTree[0] == 'series':
+                    guideTree = ['parallel', guideTree]
                 resultGuideTrees.append(guideTree)
             if dynamicMode:
                 if lastPixels[i] is not None:
                     flow = detectFlow(np.array(lastPixels[i]), np.array(pixels))
-                    rays, tree = splitImage(pixels, (0, 0), flow=flow, bothOrient=True, flexible=True)
+                    rays, tree = splitImage(pixels, (0, 0), flow=flow, bothOrient=True, flexible=True, buddhist=False)
                     print('rays', rays)
                     print('tree', tree)
                     if not staticMode:
                         treeImage = drawTree(tree)
                         treeImage.save('./images/results/treeDyn' + str(frameNum) + '-' + str(i) + '.png')
                         resultImages.append(treeImage)
-                    image = visualizeFlow(image, flow)
-                    image = drawRays(image, rays)
-                    image = drawLabels(image, tree, allTrees=True)
+                    scaleFactor = 30  # Change this to your desired scale factor
+                    image = image.resize((image.size[0] * scaleFactor, image.size[1] * scaleFactor))
+                    image = visualizeFlow(image, flow, scaleFactor=scaleFactor)
+                    image = drawRays(image, rays, scaleFactor=scaleFactor)
+                    image = drawLabels(image, tree, allTrees=True, scaleFactor=scaleFactor)
                     image.save(r'./images/results/resultDyn' + str(frameNum) + '-' + str(i) + '.png')
                     guideTree = convert2GuideTree(tree)
+                    if guideTree[0] == 'series':
+                        guideTree = ['parallel', guideTree]
                     resultGuideTrees.append(guideTree)
-                    video, probDicts, guideTreeLst, moveHistDict = drawGuideTree(guideTree, keyLen=20)
-                    video[0].save('./images/results/treeDynGuide' + str(frameNum) + '-' + str(i) + '.gif'
-                                  , save_all=True, append_images=video[1:], loop=0, duration=100)
+                    video, probDicts, guideTreeLst, moveHistDict = drawGuideTree(guideTree, frameDiv=20)
+                    video[0].save(r'./images/results/treeDynGuide' + str(frameNum) + '-' + str(i) + '.png')
+
                     resultVideos.append(video)
                 lastPixels[i] = pixels
         if len(resultImages) == 3:
             mergedImage = Image.merge("RGB", (resultImages[0], resultImages[1], resultImages[2]))
             mergedImage.save('./images/results/mergedTree' + str(frameNum) + '.png')
+            imageSeq.append(mergedImage)
+        elif len(resultImages) == 1:
+            imageSeq.append(resultImages[0])
         if len(resultVideos) == 3:
             mergedVideo = []
             for i in range(len(resultVideos[0])):
@@ -2072,6 +2148,9 @@ def main():
         print('Result guide trees', resultGuideTrees)
         resultGuideTreeCollection.append(resultGuideTrees)
     print('Result guide tree collection', resultGuideTreeCollection)  # attention: dynamic lacks the first guide tree
+    imageSeq[0].save('./images/results/treeDynSeq.gif'
+                         , save_all=True, append_images=imageSeq[1:], loop=0, duration=250)
+    print(len(imageSeq))
 
 
 if __name__ == "__main__":
