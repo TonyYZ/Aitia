@@ -87,6 +87,7 @@ global bodyDict
 global frameWidth
 global frameHeight
 global globalPixelMap
+global globalCurLayer
 global tweening
 
 def thresholdImage(image):
@@ -1055,9 +1056,6 @@ def drawGuideTree(tree, usefulProbs={}, layerMode=False, verbose=False, curPixel
     global globalPixelMap
     global tweening
 
-
-    # frameWidth = frameHeight = countBranches(tree)
-    frameWidth = frameHeight = 33
     print('saizu', frameWidth, frameHeight)
     if isInit:  # Create a blank canvas for the first frame
         curPixelMap = np.full((frameHeight, frameWidth, 2), [0.0, 0])
@@ -1086,10 +1084,6 @@ def drawGuideTree(tree, usefulProbs={}, layerMode=False, verbose=False, curPixel
     # Generate new material at every frame for those input-driven elements
     curPixelMap = drawFrame(tree, curPixelMap, [0, 0], frameWidth, frameHeight, isInit=isInit)
 
-    # Clear the single gray area
-    mask = ((curPixelMap[:, :, 0] == 127.5) & (curPixelMap[:, :, 1] == 1))
-    curPixelMap[:, :, 0][mask] = 0
-    curPixelMap[:, :, 1][mask] = 0
 
     if layerMode:
         # Mark the regions whose patterns have to be scanned
@@ -1107,12 +1101,11 @@ def drawGuideTree(tree, usefulProbs={}, layerMode=False, verbose=False, curPixel
     background = np.copy(pixelMaps[-1])  # without bodies
     macroMoveMaps = [np.copy(moveMap) for _ in range(tweening)]
 
-
+    rotateJoints(tree)
     if not isInit:
         updateBodyTrees(tree, isInit)
         for tup in bodyDict.values():
             tup[1] = False  # restore the "isUpdated" booleans
-    rotateJoints(tree)
 
     bodyPixelMaps, bodyMoveMap = moveBodies(tree, macroMoveMaps)
 
@@ -1127,12 +1120,12 @@ def drawGuideTree(tree, usefulProbs={}, layerMode=False, verbose=False, curPixel
         frame[:, :, 1][mask] = 1
 
     # Refers to the whole frame; convenient for the application of shedding elements (z and f) in bodies
-    globalPixelMap = pixelMaps[-1]
+    globalPixelMap[globalCurLayer] = pixelMaps[-1]
+
 
     for i, frame in enumerate(pixelMaps):
         quotient = frame[:, :, 0] / frame[:, :, 1]
         pixelMaps[i] = np.clip(quotient, 0, 255)
-
 
 
     if layerMode:
@@ -1294,7 +1287,8 @@ def moveBodies(guideTree, macroMoveMaps):
                                                              body.accomOrigin[0]:body.accomOrigin[0] + frameWidth])
 
             framePixelMapSeqs.append(framePixelMaps)
-            frameMoveMaps.append(body.prevMoveMaps[0])
+            frameMoveMaps.append(body.prevMoveMaps[0][body.accomOrigin[1]:body.accomOrigin[1] + frameHeight,
+                                                      body.accomOrigin[0]:body.accomOrigin[0] + frameWidth])
 
     if not framePixelMapSeqs and not frameMoveMaps:
         return [], []
@@ -1388,6 +1382,10 @@ def cropBorders(matrix, borderValue):
     croppedMatrix = matrix[np.ix_(nonBorderRows, nonBorderCols)]
     return croppedMatrix
 
+def cleanTiny(map, threshold=1e-15):
+    # Set extremely small values in a matrix to 0
+    map[np.abs(map) < threshold] = 0
+
 
 def rotateMap(oldMap, angle, isPixel=True):
     # Rotate the temporary maps and cover them on the original maps
@@ -1477,7 +1475,7 @@ class Body:
     global frameWidth
     global frameHeight
     global tweening
-    global globalPixelMap
+
     def __init__(self, tree, origin, width, height, isInit):
         self.tree, self.origin = tree, origin
         # self.tree = tree2Angles(self.tree)  # Turn the accents into angles for each element in the tree
@@ -1503,15 +1501,16 @@ class Body:
         self.prevMoveMaps = None
         # The sum of the child bodies' previous movement maps
         self.childMoveMap = None
-        # Current angle
-        self.angle = 0
+        # Current angle and current angle in the global frame
+        self.angle, self.globalAngle = 0, 0
         # Current angles in hold that belong to a joint
         self.angleLst = []
-            # self.orientSum = [0, 0]
         # Center of the bounding box in the beginning (useful for rotation)
         self.centerInit = (self.origin[0] + self.width // 2, self.origin[1] + self.height // 2)
         # Origin only changeable through macro-movements
         self.originMacro = [0, 0]
+        # How many frames have the body been present
+        self.age = 0
 
         if self.tree[0] == 'body':  # ['body', body branch 1, body branch 2, ...]
             self.updateHelper(self.tree[1], self.pixelMap, self.moveMap, [0, 0], self.width, self.height,
@@ -1530,7 +1529,7 @@ class Body:
 
     def update(self, tree, isInit):
         self.tree = tree
-        self.shedMap = np.zeros((self.height, self.width, 2), dtype=float)
+        # self.shedMap = np.zeros((self.height, self.width, 2), dtype=float)
         if self.tree[0] == 'body':  # ['body', body branch 1, body branch 2, ...]
             self.updateHelper(self.tree[1], self.pixelMap, self.moveMap, [0, 0], self.width, self.height,
                               self.tree[2:-1],  # cut the body code
@@ -1547,10 +1546,7 @@ class Body:
         self.emptyMap = np.full((self.height, self.width, 2), [0.0, 0])
         self.emptyMap[:, :, 1][emptyMask] = 1
 
-    def rotate(self):
-        for body in self.jointLst + self.bodyLst:
-            print('\t\tenter body', body.tree, body.jointLst, body.bodyLst)
-            body.rotate()
+    def rotate(self, parentAngle=0):
         if self.tree[0][0] == 'parallel':
             # Upper-level dynamic elements rotate; Base-level dynamic elements move
             if self.angleLst:
@@ -1559,6 +1555,10 @@ class Body:
                 self.angle %= 2 * math.pi  # prevent from exceeding 360 degrees
                 print('\tnow angle', self.angle / math.pi * 180)
                 self.angleLst = []  # reset angle list immediately after using it
+                self.globalAngle = parentAngle + self.angle
+        for body in self.jointLst + self.bodyLst:
+            print('\t\tenter body', body.tree, body.jointLst, body.bodyLst)
+            body.rotate(self.angle)
 
     def propagateRecall(self):
         # Sum up all children's movement maps
@@ -1566,8 +1566,7 @@ class Body:
         for body in self.bodyLst + self.jointLst:
             if body.prevMoveMaps is None:
                 continue
-            self.childMoveMap[self.accomOrigin[1]:self.accomOrigin[1] + frameHeight,
-                             self.accomOrigin[0]:self.accomOrigin[0] + frameWidth] += body.prevMoveMaps[0]
+            self.childMoveMap += body.prevMoveMaps[-1]
 
 
 
@@ -1576,6 +1575,9 @@ class Body:
         for i in range(tweening):
             self.accomPixelMaps[i][:, :] = [0.0, 0]
             self.accomMoveMaps[i][:, :] = [0, 0]
+
+        cleanTiny(self.pixelMap)
+        cleanTiny(self.moveMap)
 
         print('intern', self.width, self.height, self.origin, self.accomOrigin, self.pixelMap.shape, self.accomPixelMaps[0].shape, self.tree, len(self.jointLst))
 
@@ -1608,8 +1610,8 @@ class Body:
                 childMacroMoveMaps.append(np.zeros((frameHeight, frameWidth, 2), dtype=float))
                 overlayMap(childMacroMoveMaps[-1], self.accomMoveMaps[i], -self.accomOrigin[0],
                                                                           -self.accomOrigin[1])
-                overlayMap(childMacroMoveMaps[-1], self.accomShedMaps[i], -self.accomOrigin[0],
-                                                                          -self.accomOrigin[1])
+                #overlayMap(childMacroMoveMaps[-1], self.accomShedMaps[i], -self.accomOrigin[0],
+                #                                                          -self.accomOrigin[1])
                 if childMoveMaps:
                     overlayMap(childMacroMoveMaps[-1], childMoveMaps[i], -self.accomOrigin[0],
                                                                         -self.accomOrigin[1])
@@ -1637,6 +1639,9 @@ class Body:
             # Recalibrate origin and size after movements of child bodies
             self.recalibrate(updatingOrigin=False)
 
+        # Becomes older after each internal update
+        self.age += 1
+
 
     def moveBody(self, macroMoveMaps, isGlobal=False):
         # Self movements and rotation + joint movements and rotation
@@ -1656,20 +1661,18 @@ class Body:
                 overlayMap(newMacroMoveMaps[-1], m, *self.accomOrigin)
             else:  # counteract the part of macro-movements that come from the body's own movements
                 if isGlobal:
-                    overlayMap(newMacroMoveMaps[-1], m - self.prevMoveMaps[i], *self.accomOrigin)
+                    overlayMap(newMacroMoveMaps[-1], m - self.prevMoveMaps[i][self.accomOrigin[1]:self.accomOrigin[1] + frameHeight,
+                                         self.accomOrigin[0]:self.accomOrigin[0] + frameWidth], *self.accomOrigin)
                 else:
                     overlayMap(newMacroMoveMaps[-1], m -
                                self.accomMoveMaps[i][self.accomOrigin[1]:self.accomOrigin[1] + frameHeight,
                                          self.accomOrigin[0]:self.accomOrigin[0] + frameWidth], *self.accomOrigin)
 
-
-        print('macro res', np.sum(newMacroMoveMaps[0]), self.tree)
+        print('eecc', np.sum(newMacroMoveMaps[-1][:,:,0]), self.tree)
         self.accomPixelMaps, self.accomMoveMaps = self.runMacroMovements(newMacroMoveMaps, self.accomSize)
 
         # Body saves its previous movement map
-        self.prevMoveMaps = [m[self.accomOrigin[1]:self.accomOrigin[1] + frameHeight,
-                                   self.accomOrigin[0]:self.accomOrigin[0] + frameWidth]
-                                 for m in self.accomMoveMaps]
+        self.prevMoveMaps = self.accomMoveMaps
 
     def recalibrate(self, updatingOrigin=True):
         # Recalibrate the body's origin and size by cropping the blank margins of its body maps
@@ -1721,7 +1724,7 @@ class Body:
         # Overlay the rotated pixel maps and move maps of every body and joint
 
         if self.tree[0][0] == 'parallel':  # Joint saves its previous movement map
-            self.prevMoveMaps = [np.zeros((frameHeight, frameWidth, 2), dtype=float) for _ in range(tweening)]
+            self.prevMoveMaps = [np.zeros(accomMoveMaps[0].shape, dtype=float) for _ in range(tweening)]
 
         for i in range(tweening):
             rotatedMap = rotateMap(self.pixelMaps[i], self.angle)
@@ -1747,7 +1750,7 @@ class Body:
             overlayMap(accomMoveMaps[i], rotatedMap, *newOrigin)
 
             if self.tree[0][0] == 'parallel':  # Joint saves its previous movement map
-                overlayMap(self.prevMoveMaps[i], rotatedMap, newOrigin[0] - accomOrigin[0], newOrigin[1] - accomOrigin[1])
+                overlayMap(self.prevMoveMaps[i], rotatedMap, newOrigin[0], newOrigin[1])
 
 
 
@@ -1797,6 +1800,7 @@ class Body:
         # isUpdating: replacing trees with the new version, isInit: drawing the first frame
         global bodyDict
         global globalPixelMap
+        global globalCurLayer
 
         # Find all bodies and joints that link to itself
         if tree[0] == 'series':
@@ -1886,8 +1890,8 @@ class Body:
                                                   width, round(division * (i + 1)) - round(division * i), treeRest[1:],
                                                   isUpdating, isInit)
                 elif isSource:  # we reached the base level, so let's fill it with pixels
-                    addHex(tree, width, height, self.pixelMap, origin, isBody=True)
-            elif tree[0] in charMapDyn and isSource or len(treeRest) == 0 and (tree[0] == 'z' or tree[0] == 'f'):
+                    addHex(tree, width, height, self.pixelMap, origin)
+            elif tree[0] in charMapDyn and isSource or tree[0] in ['z', 'f'] and self.age == 1:
                 # Since both base-level and upper elements have observable effects, we need to check if they are sources
                 if len(treeRest) > 0:
                     orientSum = [0, 0]
@@ -1898,29 +1902,35 @@ class Body:
                         orientSum[1] = sum(vecMap[reversedHexMap[charMapDyn[tree[0]]]][0])
                     self.angleLst.append(coord2Angle(*orientSum))
                 else:  # let's fill it with movement vectors
-                    if tree[0] in ['ż', 'm'] and not isInit:
+                    if tree[0] in ['z', 'f'] and not isInit:
+                        mask = np.full((height, width), True)
+                        rotatedMask = rotateMap(mask, self.globalAngle)
+                        rotatedMask = np.repeat(rotatedMask[:, :, np.newaxis], 2, axis=2)
+
+                        print('originee', origin, height, width, rotatedMask.shape)
+                        newOrigin = ((rotatedMask.shape[0] - width) // 2 - origin[0],
+                                    (rotatedMask.shape[1] - height) // 2 - origin[1])
                         # The view of global map allowed for shedding
-                        viewPixelMap = np.full((height, width, 2), (0.0, 0))
-                        overlayMap(viewPixelMap, globalPixelMap, -origin[0], -origin[1])
-                        planMovements(tree, viewPixelMap,
-                                      self.shedMap, origin, width, height)
+                        viewPixelMap = np.full(rotatedMask.shape, (0.0, 0))
+                        overlayMap(viewPixelMap, globalPixelMap[globalCurLayer], *newOrigin)
+                        viewPixelMap = np.where(rotatedMask, viewPixelMap, [0, 0])
+                        shedMap = np.zeros(viewPixelMap.shape, dtype=float)
+                        planMovements(tree, viewPixelMap, shedMap, origin, width, height, self.globalAngle)
+                        rotatedShedMap = rotateMap(shedMap, -self.globalAngle, isPixel=False)
+                        rotatedMask = rotatedMask[:, :, 0]
+                        rotatedMask = rotateMap(rotatedMask, -self.globalAngle)
+                        cutOriginY, cutOriginX, cutEndY, cutEndX = locateBoundRect(rotatedMask, mode=2)
+                        overlayMap(self.moveMap, rotatedShedMap[cutOriginY:cutEndY, cutOriginX:cutEndX], *origin)
+                        print('hey')
                     else:
                         planMovements(tree, self.pixelMap, self.moveMap, origin, width, height)
 
 
-def addHex(tree, width, height, pixelMap, origin, isBody=False):
+def addHex(tree, width, height, pixelMap, origin):
     # Lay out the two or three pixel regions according to the static element
     orient = tree[1]  # trigram's orientation
 
-    if tree[0] == 'n':
-        if not isBody:
-            pixel = pixelMap[origin[1]:origin[1] + height, origin[0]:origin[0] + width]
-            # validMask = ~np.all(pixel == [127.5, 1], axis=-1)
-            validMask = pixel[:, :, 1] == 0
-            if np.any(validMask):
-                pixel[validMask, 0] += 127.5
-                pixel[validMask, 1] += 1
-    else:
+    if tree[0] != 'n':
         n_gram = len(charMap[tree[0]])  # how many divisions (bigram or trigram)
         if orient == 1:  # vertical
             division = height / n_gram
@@ -1946,6 +1956,7 @@ def addHex(tree, width, height, pixelMap, origin, isBody=False):
                 '''
                 pixel[:, :, 0] += 255 * charMap[tree[0]][i]
                 pixel[:, :, 1] += 1
+
 def computeAccom(width, height):
     accomSize = width + height
     accomSize += 1 if accomSize % 2 == 1 else 0
@@ -1973,20 +1984,20 @@ def getStages(angle):
     return stages
 
 
-def scanOblique(tree, curFrame, moveMap, origin, width, height, requiredLayers=1):
+def scanOblique(tree, curFrame, moveMap, origin, width, height, requiredLayers=2, angleAdd=0):
     # Detect the first line of pixels cut from a given angle
     # requiredLayers means the number of layers that need to be shed in one round
 
-    angle = orient2Angle(tree[1])
-    rad = math.radians(angle)
+    angleDeg = orient2Angle(tree[1]) + math.degrees(angleAdd)
+    rad = math.radians(angleDeg)
     stepX, stepY = angle2Coord(rad - math.pi / 2)
     moveX, moveY = angle2Coord(rad) if tree[0] == 'z' else angle2Coord(math.pi + rad)
-    stages = getStages(angle)
+    stages = getStages(angleDeg)
 
     if tree[0] != 'z':
         stages.reverse()
 
-    print('params', angle, stepX, stepY, moveX, moveY, stages, tree, moveMap.shape, curFrame.shape)
+    print('params', angleDeg, stepX, stepY, moveX, moveY, stages, tree, moveMap.shape, curFrame.shape)
     passedLayers = 0
     for curStage in stages:
         if curStage == 1:
@@ -2029,7 +2040,7 @@ def scanOblique(tree, curFrame, moveMap, origin, width, height, requiredLayers=1
     return moveMap
 
 
-def planMovements(tree, curFrame, moveMap, origin, width, height):
+def planMovements(tree, curFrame, moveMap, origin, width, height, angleAdd=0):
     # Compute the movement vectors based on the tree
     if tree[0] == 'parallel':
         if tree[-1] == 'filler' or isinstance(tree[-1], int):
@@ -2050,7 +2061,7 @@ def planMovements(tree, curFrame, moveMap, origin, width, height):
                     moveMap[origin[1] + i][origin[0] + j] = [random.choice([-intensity, intensity]), random.choice([-intensity, intensity])]
     elif tree[0] in ['z', 'f']:
         # Only "corrode" the top layer
-        scanOblique(tree, curFrame, moveMap, origin, width, height)
+        scanOblique(tree, curFrame, moveMap, origin, width, height, angleAdd=angleAdd)
     elif tree[0] in charMapDyn:
         # Lay out the two movement regions according to the dynamic element
         orient = orient2Angle(tree[1])  # trigram's orientation
@@ -2312,11 +2323,15 @@ def optimizeLayerRange(layerLst):
 
 
 def compLayers(guideTree, layerMode=True, verbose=False,
-               fillDyn=True, mirrorMode=True, keyLen=20):
+               fillDyn=True, mirrorMode=True, keyLen=20, fWidth=33, fHeight=33):
     # Simulate the dynamics specified by the guide trees
     global unknownTree
     global bodyDict
     global tweening
+    global globalCurLayer
+    global globalPixelMap
+    global frameWidth
+    global frameHeight
 
     guideTree = labelBodies(guideTree)[0]
     print('labelled', guideTree)
@@ -2354,9 +2369,13 @@ def compLayers(guideTree, layerMode=True, verbose=False,
     layerPixelMaps = [None for _ in range(maxLayer - minLayer)]
     layerMoveMaps = [None for _ in range(maxLayer - minLayer)]
     bodyDicts = [{} for _ in range(maxLayer - minLayer)]
+    globalPixelMap = {}
+    frameWidth, frameHeight = fWidth, fHeight
+
     for curFrameInd in range(keyLen):  # traverse through the layers at every frame
         usefulProbs = {}
         for i, layer in enumerate(range(minLayer, maxLayer)):
+            globalCurLayer = layer
             if layer - 1 in timetable:
                 # Probabilities useful for subsequent computations
                 # Provided by the layer below current layer and the layer below the mirrored layer
@@ -2805,33 +2824,35 @@ def main():
 
 
 
-
-
-
-
-
     # chaos
     sourceTree = ['parallel', ['n', 0, 0], ['body', ['d', 0, 0], ['r', 1, 0], ['j', 0, 0]], ['body', ['parallel', ['b', 0, 0], ['ż', 0, 0]]]]
 
-    # oblique cut
-    sourceTree = ['body', ['parallel', ['b', 0, 0], ['body', ['parallel', ['t', 0, 0], ['t', 1, 0], ['j', 0, 0]], ['parallel', ['h', 0, 0], ['z', 0, 0]]]]]
-
     # revolving car
-    sourceTree = ['series', ['body', ['parallel', ['body', ['series', ['h', 0, 0]]], ['series', ['t', 0, 0]], ['body',
+    sourceTree = ['body', ['r', 0, 0], ['r', 1, 0], ['series', ['body', ['parallel', ['body', ['series', ['h', 0, 0]]], ['series', ['t', 0, 0]], ['body',
                                                                             ['parallel',
                                                                              ['series', ['j', 0, 0]],
                                                                              ['parallel', ['h', 0, -1],
-                                                                             ['series', ['t', 0, 0]],
+                                                                             ['series', ['t', 0, 0]],['series', ['t', 0, 0]],
                                                                              ['series', ['t', 1, 0]]]],
                                                                             ['parallel', ['series', ['r', 1, 0]], ['series', ['t', 0, 0]]
-                                                                             ]]]], ['n', 0, 0]]
+                                                                             ]]]], ['n', 0, 0]]]
+
+
     # 蠕动
     sourceTree = ['series', ['n', 0, 0], ['body', ['parallel', ['p', 0, 0], ['t', 0, 0], ['j', 0, 0]]], ['n', 0, 0]]
 
     sourceTree = ['series', ['n', 0, 0], ['body', ['parallel', ['t', 1, 0], ['j', 0, 0]], ['series', ['body', ['parallel', ['b', 1, 0], ['t', 1, 0]]], ['n', 0, 0]]], ['n', 0, 0]]
-    sourceTree = ['parallel', ['body', ['parallel', ['t', 1, 0], ['j', 0, 0]], ['series', ['n', 0, 0], ['body', ['parallel', ['b', 0, 0], ['z', 0, 0]]], ['n', 0, 0]]]]
-    sourceTree = ['series', ['n', 0, 0], ['body', ['parallel', ['b', 0, 0], ['z', 0, 0]]], ['parallel', ['n', 0, 0], ['n', 0, 0]]]
-    # sourceTree = ['body', ['parallel', ['b', 1, 0], ['z', 1, 0]]]
+    sourceTree = ['parallel', ['body', ['parallel', ['t', 1, 0], ['j', 0, 0]], ['series', ['n', 0, 0], ['body', ['parallel', ['b', 0, 0], ['t', 0, 0], ['z', 0, 0], ['f', 0, 0]]], ['n', 0, 0]]], ['body', ['r', 0, 0], ['r', 0, 0]]]
+
+    # 来回
+    sourceTree = ['series', ['parallel', ['body', ['j', 0, 0]], ['t', 0, 0]], ['c', 0, 0]]
+
+    # oblique cut
+    sourceTree = ['body', ['r', 0, 0], ['r', 1, 0], ['parallel', ['b', 0, 0], ['body', ['parallel', ['t', 0, 0], ['c', 1, 0], ['j', 0, 0]], ['parallel', ['f', 0, 0]]]]]
+
+    sourceTree = ['body',  ['parallel', ['parallel', ['h', 0, -1], ['ż', 0, 0]], ['body',['r', 0, 0], ['r', 1, 0],['r', 0, 0], ['parallel', ['r', 1, 0], ['parallel', ['h', 0, -1], ['t', 1, 0]]], ['b', 0, 0]]]]
+
+    # sourceTree = ['body', ['parallel', ['b', 1, 0], ['parallel', ['h', 0, -1], ['ż', 1, 0]]]]
     # sourceTree = ['body', ['parallel', ['t', 0, 0], ['body', ['d', 0, 0], ['j', 0, 0]]]]
     #sourceTree = ['series', ['body', ['series', ['parallel', ['t', 0, 0], ['t', 0, 0], ['t', 0, 0], ['t', 0, 0], ['t', 1, 0], ['j', 0, 0]],
     #                                  ['parallel', ['t', 0, 0], ['j', 0, 0]]], ['parallel', ['b', 0, 0], ['t', 1, 0]]]]
@@ -2842,7 +2863,7 @@ def main():
     # sourceTree = ['parallel', ['series', ['b', 0, 0]], ['series', ['d', 1, 0]]]
     print('source tree', sourceTree)
     tweening = 1
-    videos, layerLst, zeroLayerTrees = compLayers(sourceTree, keyLen=40, verbose=True, fillDyn=False, mirrorMode=True)
+    videos, layerLst, zeroLayerTrees = compLayers(sourceTree, keyLen=40, verbose=True, fillDyn=False, mirrorMode=True, fWidth=33, fHeight=33)
     print("videos", videos)
     print("layer lst", layerLst)
     print("zero", zeroLayerTrees)
