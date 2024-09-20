@@ -2844,13 +2844,15 @@ def main():
     sourceTree = ['series', ['n', 0, 0], ['body', ['parallel', ['t', 1, 0], ['j', 0, 0]], ['series', ['body', ['parallel', ['b', 1, 0], ['t', 1, 0]]], ['n', 0, 0]]], ['n', 0, 0]]
     sourceTree = ['parallel', ['body', ['parallel', ['t', 1, 0], ['j', 0, 0]], ['series', ['n', 0, 0], ['body', ['parallel', ['b', 0, 0], ['t', 0, 0], ['z', 0, 0], ['f', 0, 0]]], ['n', 0, 0]]], ['body', ['r', 0, 0], ['r', 0, 0]]]
 
-    # 来回
-    sourceTree = ['series', ['parallel', ['body', ['j', 0, 0]], ['t', 0, 0]], ['c', 0, 0]]
 
     # oblique cut
     sourceTree = ['body', ['r', 0, 0], ['r', 1, 0], ['parallel', ['b', 0, 0], ['body', ['parallel', ['t', 0, 0], ['c', 1, 0], ['j', 0, 0]], ['parallel', ['f', 0, 0]]]]]
 
+    # wandering eye
     sourceTree = ['body',  ['parallel', ['parallel', ['h', 0, -1], ['ż', 0, 0]], ['body',['r', 0, 0], ['r', 1, 0],['r', 0, 0], ['parallel', ['r', 1, 0], ['parallel', ['h', 0, -1], ['t', 1, 0]]], ['b', 0, 0]]]]
+
+    # 来回
+    sourceTree = ['series', ['parallel', ['body', ['j', 0, 0]], ['t', 0, 0]], ['c', 0, 0]]
 
     # sourceTree = ['body', ['parallel', ['b', 1, 0], ['parallel', ['h', 0, -1], ['ż', 1, 0]]]]
     # sourceTree = ['body', ['parallel', ['t', 0, 0], ['body', ['d', 0, 0], ['j', 0, 0]]]]
