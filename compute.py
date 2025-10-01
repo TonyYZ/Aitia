@@ -63,14 +63,15 @@ charMapAll = {**charMap, **charMapDyn}
 dimMap = {0: 'y', 1: 'x'}
 dynMap = {0: '靜', 1: '動'}
 leafSymbols = list(charMapAll.keys())
-nodeSymbols = ['series', 'parallel', 'body']
-replaceDict = {'series': '串', 'parallel': '並', 'body': '身'}
+nodeSymbols = ['series', 'parallel', 'body', 'plan']
+replaceDict = {'series': '串', 'parallel': '並', 'body': '身', 'plan': '陣'}
 
 colorMode = False
 colorA = (255, 0, 0)
 colorB = (0, 200, 200)
 unknownTree = ['parallel', ['series', ['ṡ', 0, 0]], ['series', ['m', 0, 0]]]
 unknownTree = ['parallel', ['series', ['n', 0, 0]]]
+tweening = 10
 global axes
 global fig
 global ani
@@ -88,7 +89,7 @@ global frameWidth
 global frameHeight
 global globalPixelMap
 global globalCurLayer
-global tweening
+
 
 def thresholdImage(image):
     thresh = 100
@@ -885,7 +886,7 @@ def reverseGuideTree(guideTree):
             if newGuideTree[1 + i] == 'filler':
                 continue
             newGuideTree[1 + i] = reverseGuideTree(newGuideTree[1 + i])
-    elif guideTree[0] in ['parallel', 'body']:
+    elif guideTree[0] in ['parallel', 'body', 'plan']:
         newGuideTree = [guideTree[0]]
         for i in range(len(comps)):
             if guideTree[1 + i] == 'filler' or isinstance(guideTree[1 + i], int):
@@ -952,13 +953,13 @@ def filterLayer(guideTree, layer, codeMode=True, code=None, mirrorMode=True, ver
             newGuideTree.append(branch)
         if bodyCode != -1:  # add body code to the end
             newGuideTree.append(bodyCode)
-    elif guideTree[0] in ['series', 'parallel', 'body']:
+    elif guideTree[0] in ['series', 'parallel', 'body', 'plan']:
         # no code pairs; just single out elements that belong to the specified layer
         for comp in guideTree[1:]:
             if comp == 'filler' or isinstance(comp, int):
                 newGuideTree.append(comp)
                 continue
-            if comp[0] in ['series', 'parallel', 'body']:
+            if comp[0] in ['series', 'parallel', 'body', 'plan']:
                 comp, code = filterLayer(comp, layer, codeMode=codeMode, code=code, mirrorMode=mirrorMode,
                                          verbose=verbose)
                 if verbose:
@@ -970,7 +971,7 @@ def filterLayer(guideTree, layer, codeMode=True, code=None, mirrorMode=True, ver
 
 
 def soakCode(tree, codePair, layer):
-    if tree[0] in ['series', 'parallel', 'body']:
+    if tree[0] in ['series', 'parallel', 'body', 'plan']:
         for comp in tree[1:]:
             if comp == 'filler' or isinstance(comp, int):
                 continue
@@ -984,7 +985,7 @@ def soakCode(tree, codePair, layer):
 
 
 def fillDynamic(guideTree):
-    if guideTree[0] in ['series', 'parallel', 'body']:
+    if guideTree[0] in ['series', 'parallel', 'body', 'plan']:
         newGuideTree = [guideTree[0]]
         for i, comp in enumerate(guideTree):
             if i == 0:
@@ -1000,7 +1001,7 @@ def fillDynamic(guideTree):
 
 def getAllLayers(guideTree):
     layerLst = []
-    if guideTree[0] in ['series', 'parallel', 'body']:
+    if guideTree[0] in ['series', 'parallel', 'body', 'plan']:
         for comp in guideTree[1:]:
             if comp == 'filler' or isinstance(comp, int):
                 continue
@@ -1032,7 +1033,7 @@ def countBranches(tree):
             newBranchNum = countBranches(branch)
             if newBranchNum > branchNum:
                 branchNum = newBranchNum
-    elif tree[0] == 'body':
+    elif tree[0] in ['body', 'plan']:
         branchNums = []
         for branch in tree[1:]:
             if branch == 'filler' or isinstance(branch, int):
@@ -1093,7 +1094,8 @@ def drawGuideTree(tree, usefulProbs={}, layerMode=False, verbose=False, curPixel
 
     moveMap = np.zeros((frameHeight, frameWidth, 2), dtype=float)
     planMovements(tree, curPixelMap, moveMap, (0, 0), frameWidth, frameHeight)
-    if bodyMoveMap is not None:
+
+    if isinstance(bodyMoveMap, np.ndarray):
         moveMap += bodyMoveMap  # bodies move the non-body pixels in turn
 
     pixelMaps = runMovements(curPixelMap, moveMap)  # include inbetweening frames
@@ -1101,14 +1103,13 @@ def drawGuideTree(tree, usefulProbs={}, layerMode=False, verbose=False, curPixel
     background = np.copy(pixelMaps[-1])  # without bodies
     macroMoveMaps = [np.copy(moveMap) for _ in range(tweening)]
 
-    rotateJoints(tree)
+
     if not isInit:
         updateBodyTrees(tree, isInit)
         for tup in bodyDict.values():
             tup[1] = False  # restore the "isUpdated" booleans
-
+    rotateJoints(tree)
     bodyPixelMaps, bodyMoveMap = moveBodies(tree, macroMoveMaps)
-
 
 
     if bodyPixelMaps:
@@ -1156,7 +1157,7 @@ def tup2lst(tup):
 
 def testElements(guideTree, choiceDict):
     # Only keep elements permitted by the dice results
-    if guideTree[0] in ['series', 'parallel', 'body']:
+    if guideTree[0] in ['series', 'parallel', 'body', 'plan']:
         newGuideTree = [guideTree[0]]
         for comp in guideTree[1:]:
             if comp == 'filler' or isinstance(comp, int):
@@ -1180,7 +1181,7 @@ def cleanGuideTree(guideTree, keepCode=True):
             return []
         if isPair(guideTree[-1]) and not keepCode:
             guideTree = guideTree[:-1]
-        if guideTree[0] in ['series', 'parallel', 'body']:
+        if guideTree[0] in ['series', 'parallel', 'body', 'plan']:
             if len(guideTree) == 1:
                 return []
             newGuideTree = [guideTree[0]]
@@ -1212,6 +1213,9 @@ def cleanGuideTree(guideTree, keepCode=True):
             return guideTree.copy()
 
 
+def checkDeath(body):
+    return np.all(body.pixelMap == 0) and np.all(body.moveMap == 0)
+
 def drawFrame(tree, curFrame, origin, width, height, isInit):
     global bodyDict
     # Only draw the non-body parts and reap the bodies (body node and coded elements)
@@ -1225,9 +1229,14 @@ def drawFrame(tree, curFrame, origin, width, height, isInit):
         for i, comp in enumerate(tree[1:]):
             curFrame = drawFrame(comp, curFrame, [origin[0] + round(division * i), origin[1]],
                                  round(division * (i + 1)) - round(division * i), height, isInit)
-    elif tree[0] == 'body' and tree[-1] not in bodyDict:
+    elif tree[0] in ['body', 'plan']: # and tree[-1] not in bodyDict:
+        print("let's create a new body", tree)
         bodyDict.setdefault(tree[-1], [[], False])[0].append(
-            Body(tree, origin, width, height, isInit))  # record a new body
+            Body(tree, origin, width, height, tree[0] == 'plan', isInit))  # record a new body
+
+        if checkDeath(bodyDict[tree[-1]][0][-1]):  # if the new body has nothing inside, it is destroyed immediately
+            print('destroyed!!')
+            bodyDict[tree[-1]][0] = bodyDict[tree[-1]][0][:-1]
     elif tree[0] in charMap:
         if (not isPair(tree[-1]) or isPair(tree[-1]) and tree[-1][0] == 0) and not isInit:
             # Only input-driven elements can be infinitely produced.
@@ -1245,7 +1254,7 @@ def updateBodyTrees(guideTree, isInit):
             if comp == 'filler':
                 continue
             updateBodyTrees(comp, isInit)
-    elif guideTree[0] == 'body' and isinstance(guideTree[-1], int):
+    elif guideTree[0] in ['body', 'plan'] and isinstance(guideTree[-1], int):
         for body in bodyDict[guideTree[-1]][0]:
             body.update(guideTree, isInit)  # stop at the surface and let the bodies do the rest
 
@@ -1257,7 +1266,7 @@ def rotateJoints(guideTree):
             if comp == 'filler':
                 continue
             rotateJoints(comp)
-    elif guideTree[0] == 'body' and isinstance(guideTree[-1], int):
+    elif guideTree[0] in ['body', 'plan'] and isinstance(guideTree[-1], int):
         for body in bodyDict[guideTree[-1]][0]:
             body.rotate()  # stop at the surface and let the bodies do the rest
 
@@ -1276,7 +1285,7 @@ def moveBodies(guideTree, macroMoveMaps):
             if result != ([], []):
                 framePixelMapSeqs.append(result[0])
                 frameMoveMaps.append(result[1])
-    elif guideTree[0] == 'body' and isinstance(guideTree[-1], int):
+    elif guideTree[0] in ['body', 'plan'] and isinstance(guideTree[-1], int):
         for body in bodyDict[guideTree[-1]][0]:
             body.moveBody(macroMoveMaps, isGlobal=True)  # stop at the surface and let the bodies do the rest
             framePixelMaps = []
@@ -1293,12 +1302,12 @@ def moveBodies(guideTree, macroMoveMaps):
     if not framePixelMapSeqs and not frameMoveMaps:
         return [], []
     if len(framePixelMapSeqs) > 1:
-        framePixelMaps = [np.add(*pair) for pair in zip(*framePixelMapSeqs)]
+        framePixelMaps = [sum(pair) for pair in zip(*framePixelMapSeqs)]
     elif len(framePixelMapSeqs) == 1:
         framePixelMaps = framePixelMapSeqs[0]
 
     if len(frameMoveMaps) > 1:
-        frameMoveMap = np.add(*frameMoveMaps)
+        frameMoveMap = sum(frameMoveMaps)
     elif len(frameMoveMaps) == 1:
         frameMoveMap = frameMoveMaps[0]
     return framePixelMaps, frameMoveMap
@@ -1338,7 +1347,7 @@ def angle2Coord(angle):
 
 
 def tree2Angles(guideTree, add=0):
-    if guideTree[0] in ['series', 'parallel', 'body']:
+    if guideTree[0] in ['series', 'parallel', 'body', 'plan']:
         newGuideTree = [guideTree[0]]
         for comp in guideTree[1:]:
             if comp == 'filler' or isinstance(comp, int):
@@ -1367,20 +1376,6 @@ def vec2Angle(vec, orient):
     needFlip = 1 if vec == -1 else 0
     return (orient * math.pi * 3 / 2 + math.pi * needFlip) % (math.pi * 2)
 
-
-def cropBorders(matrix, borderValue):
-    if isinstance(borderValue, list):  # moveMap has (NaN, NaN) tuples
-        # Find rows that are not entirely filled with borderValue
-        nonBorderRows = [i for i in range(matrix.shape[0]) if not np.all(np.isnan(matrix[i]))]
-        # Find columns that are not entirely filled with borderValue
-        nonBorderCols = [j for j in range(matrix.shape[1]) if not np.all(np.isnan(matrix[:, j]))]
-    else:  # pixelMap has -1 values
-        nonBorderRows = [i for i in range(matrix.shape[0]) if not np.all(matrix[i] == borderValue)]
-        nonBorderCols = [j for j in range(matrix.shape[1]) if not np.all(matrix[:, j] == borderValue)]
-
-    # Crop the matrix
-    croppedMatrix = matrix[np.ix_(nonBorderRows, nonBorderCols)]
-    return croppedMatrix
 
 def cleanTiny(map, threshold=1e-15):
     # Set extremely small values in a matrix to 0
@@ -1435,10 +1430,10 @@ def locateBoundRect(matrix, mode=0):
 
 
 def labelBodies(tree, bodyCode=0, inBody=False, treeRest=[]):
-    if tree[0] in ['series', 'parallel', 'body']:
+    if tree[0] in ['series', 'parallel', 'body', 'plan']:
         labeledTree = [tree[0]]
         childInBody = inBody
-        if tree[0] == 'body':  # you are entering body
+        if tree[0] in ['body', 'plan']:  # you are entering body
             inBody = True
             childInBody = True
         elif tree[0] == 'parallel' and inBody:  # sub-joint parallel nodes cannot be joints unless through bodies
@@ -1446,7 +1441,7 @@ def labelBodies(tree, bodyCode=0, inBody=False, treeRest=[]):
             childInBody = False
 
         for i, branch in enumerate(tree[1:]):
-            if tree[0] == 'body':
+            if tree[0] in ['body', 'plan']:
                 treeRest = tree[i + 1:] + treeRest
                 if not treeRest:  # skip base-level elements, unless there are bodies
                     childInBody = False
@@ -1458,7 +1453,7 @@ def labelBodies(tree, bodyCode=0, inBody=False, treeRest=[]):
 
     # In-body parallel nodes are joints (except for sub-joint parallel nodes)
     # We don't record body branches in the body dict
-    if tree[0] == 'body' or tree[0] == 'parallel' and tree[-1] != 'filler' and inBody:
+    if tree[0] in ['body', 'plan'] or tree[0] == 'parallel' and tree[-1] != 'filler' and inBody:
         labeledTree.append(bodyCode)
         bodyCode += 1
     return labeledTree, bodyCode
@@ -1476,8 +1471,9 @@ class Body:
     global frameHeight
     global tweening
 
-    def __init__(self, tree, origin, width, height, isInit):
+    def __init__(self, tree, origin, width, height, isPlan, isInit):
         self.tree, self.origin = tree, origin
+        self.isPlan = isPlan  # plan means a static organization of movements
         # self.tree = tree2Angles(self.tree)  # Turn the accents into angles for each element in the tree
         self.width, self.height = width, height
         self.bodyLst, self.jointLst = [], []
@@ -1487,10 +1483,8 @@ class Body:
         # self.pixelMap = np.full((height, width, 2), [127.5, 1])
         # Move map is computed after pixel map is computed
         self.moveMap = np.zeros((height, width, 2), dtype=float)
-        # Shed map is a type of move map that only involves s, z, sh, and zh
-        self.shedMap = np.zeros((height, width, 2), dtype=float)
         # Maps and parameters that take account of the children joints and bodies
-        self.pixelMaps, self.moveMaps, self.accomShedMaps, self.accomEmptyMaps, self.origins, self.widths, self.heights = None, None, None, None, None, None, None
+        self.pixelMaps, self.moveMaps, self.accomEmptyMaps, self.origins, self.widths, self.heights = None, None, None, None, None, None
         # Accom size based on frame size
         self.accomSize, self.accomOrigin = computeAccom(frameWidth, frameHeight)
         # Pixel maps and move maps placed within a larger frame
@@ -1512,7 +1506,7 @@ class Body:
         # How many frames have the body been present
         self.age = 0
 
-        if self.tree[0] == 'body':  # ['body', body branch 1, body branch 2, ...]
+        if self.tree[0] in ['body', 'plan']:  # ['body', body branch 1, body branch 2, ...]
             self.updateHelper(self.tree[1], self.pixelMap, self.moveMap, [0, 0], self.width, self.height,
                               self.tree[2:-1],  # cut the body code
                               False, isInit)
@@ -1529,8 +1523,7 @@ class Body:
 
     def update(self, tree, isInit):
         self.tree = tree
-        # self.shedMap = np.zeros((self.height, self.width, 2), dtype=float)
-        if self.tree[0] == 'body':  # ['body', body branch 1, body branch 2, ...]
+        if self.tree[0] in ['body', 'plan']:  # ['body', body branch 1, body branch 2, ...]
             self.updateHelper(self.tree[1], self.pixelMap, self.moveMap, [0, 0], self.width, self.height,
                               self.tree[2:-1],  # cut the body code
                               True, isInit)
@@ -1570,11 +1563,11 @@ class Body:
 
 
 
-    def moveInternal(self):
+    def moveInternal(self, macroMoveMaps):
         # Compute the movements of the maps of the self that are yet to be rotated
-        for i in range(tweening):
-            self.accomPixelMaps[i][:, :] = [0.0, 0]
-            self.accomMoveMaps[i][:, :] = [0, 0]
+        self.accomPixelMaps = [np.full(self.accomSize, [0.0, 0]) for _ in range(tweening)]
+        self.accomMoveMaps = [np.zeros(self.accomSize, dtype=float) for _ in range(tweening)]
+
 
         cleanTiny(self.pixelMap)
         cleanTiny(self.moveMap)
@@ -1592,34 +1585,36 @@ class Body:
                                self.accomOrigin[0] + self.origin[0]:self.accomOrigin[0] + self.origin[0] + self.width] += self.moveMap
         '''
 
-        accomShedMap = np.zeros(self.accomSize, dtype=float)
-        overlayMap(accomShedMap, self.shedMap, self.accomOrigin[0] + self.origin[0], self.accomOrigin[1] + self.origin[1])
-
         accomEmptyMap = np.zeros(self.accomSize, dtype=float)
         overlayMap(accomEmptyMap, self.emptyMap, self.accomOrigin[0] + self.origin[0], self.accomOrigin[1] + self.origin[1])
 
         # Movements of local pixels
-        self.accomPixelMaps, self.accomMoveMaps, childMoveMaps, self.accomShedMaps, self.accomEmptyMaps = runMovements(self.accomPixelMaps[0], self.accomMoveMaps[0], self.childMoveMap, accomShedMap, accomEmptyMap, isBody=True)
+        self.accomPixelMaps, self.accomMoveMaps, childMoveMaps, self.accomEmptyMaps = runMovements(self.accomPixelMaps[0], self.accomMoveMaps[0], self.childMoveMap, accomEmptyMap, isBody=True, isPlan=self.isPlan)
         # Recalibrate origin and size after local movements
         self.recalibrate(updatingOrigin=True)
 
 
-        if self.bodyLst:
-            childMacroMoveMaps = []
+        childMacroMoveMaps = []
+
+        if self.bodyLst and any([not b.isPlan for b in self.bodyLst]):
             for i in range(tweening):
                 childMacroMoveMaps.append(np.zeros((frameHeight, frameWidth, 2), dtype=float))
-                overlayMap(childMacroMoveMaps[-1], self.accomMoveMaps[i], -self.accomOrigin[0],
-                                                                          -self.accomOrigin[1])
-                #overlayMap(childMacroMoveMaps[-1], self.accomShedMaps[i], -self.accomOrigin[0],
-                #                                                          -self.accomOrigin[1])
-                if childMoveMaps:
-                    overlayMap(childMacroMoveMaps[-1], childMoveMaps[i], -self.accomOrigin[0],
-                                                                        -self.accomOrigin[1])
+                if self.isPlan:
+                    overlayMap(childMacroMoveMaps[-1], macroMoveMaps[-1], 0, 0)
+                else:
+                    overlayMap(childMacroMoveMaps[-1], self.accomMoveMaps[i], -self.accomOrigin[0],
+                                                                              -self.accomOrigin[1])
+                    if childMoveMaps:
+                        overlayMap(childMacroMoveMaps[-1], childMoveMaps[i], -self.accomOrigin[0],
+                                                                            -self.accomOrigin[1])
 
 
         # Movements of child bodies and rotation
         for body in self.bodyLst:
-            body.moveBody(childMacroMoveMaps)
+            if body.isPlan:
+                body.moveBody([])
+            else:
+                body.moveBody(childMacroMoveMaps)
             for i in range(tweening):
                 self.accomPixelMaps[i] += body.accomPixelMaps[i]
                 self.accomMoveMaps[i] += body.accomMoveMaps[i]
@@ -1631,7 +1626,6 @@ class Body:
             joint.propagateOverlay(self.accomPixelMaps, self.accomMoveMaps, self.accomOrigin)
             print('ende')
 
-        print('bull', self.bodyLst, self.jointLst)
         if (self.bodyLst + self.jointLst) or True:
             # The movements of children bodies are applied back to the parent body
             self.propagateRecall()
@@ -1645,7 +1639,7 @@ class Body:
 
     def moveBody(self, macroMoveMaps, isGlobal=False):
         # Self movements and rotation + joint movements and rotation
-        self.moveInternal()
+        self.moveInternal(macroMoveMaps)
 
         for i in range(tweening):
             self.accomPixelMaps[i][:, :] = [0.0, 0]
@@ -1653,23 +1647,24 @@ class Body:
 
         self.propagateOverlay(self.accomPixelMaps, self.accomMoveMaps, self.accomOrigin)
 
-        # Movements of the entire body
-        newMacroMoveMaps = []
-        for i, m in enumerate(macroMoveMaps):
-            newMacroMoveMaps.append(np.zeros(self.accomSize, dtype=float))
-            if self.prevMoveMaps is None:
-                overlayMap(newMacroMoveMaps[-1], m, *self.accomOrigin)
-            else:  # counteract the part of macro-movements that come from the body's own movements
-                if isGlobal:
-                    overlayMap(newMacroMoveMaps[-1], m - self.prevMoveMaps[i][self.accomOrigin[1]:self.accomOrigin[1] + frameHeight,
-                                         self.accomOrigin[0]:self.accomOrigin[0] + frameWidth], *self.accomOrigin)
-                else:
-                    overlayMap(newMacroMoveMaps[-1], m -
-                               self.accomMoveMaps[i][self.accomOrigin[1]:self.accomOrigin[1] + frameHeight,
-                                         self.accomOrigin[0]:self.accomOrigin[0] + frameWidth], *self.accomOrigin)
+        if not self.isPlan:
+            # Movements of the entire body
+            newMacroMoveMaps = []
+            for i, m in enumerate(macroMoveMaps):
+                newMacroMoveMaps.append(np.zeros(self.accomSize, dtype=float))
+                if self.prevMoveMaps is None:
+                    overlayMap(newMacroMoveMaps[-1], m, *self.accomOrigin)
+                else:  # counteract the part of macro-movements that come from the body's own movements
+                    if isGlobal or True:
+                        overlayMap(newMacroMoveMaps[-1], m - self.prevMoveMaps[i][self.accomOrigin[1]:self.accomOrigin[1] + frameHeight,
+                                             self.accomOrigin[0]:self.accomOrigin[0] + frameWidth], *self.accomOrigin)
+                    else:
+                        overlayMap(newMacroMoveMaps[-1], m -
+                                   self.accomMoveMaps[i][self.accomOrigin[1]:self.accomOrigin[1] + frameHeight,
+                                             self.accomOrigin[0]:self.accomOrigin[0] + frameWidth], *self.accomOrigin)
 
-        print('eecc', np.sum(newMacroMoveMaps[-1][:,:,0]), self.tree)
-        self.accomPixelMaps, self.accomMoveMaps = self.runMacroMovements(newMacroMoveMaps, self.accomSize)
+            print('eecc', np.sum(newMacroMoveMaps[-1][:,:,0]), self.tree)
+            self.accomPixelMaps, self.accomMoveMaps = self.runMacroMovements(newMacroMoveMaps, self.accomSize)
 
         # Body saves its previous movement map
         self.prevMoveMaps = self.accomMoveMaps
@@ -1743,9 +1738,6 @@ class Body:
             print('a', a, 'b', b, 'deltaX', deltaX, 'deltaY', deltaY, 'angle', self.angle / math.pi * 180, 'centerInit', self.centerInit, 'widths', self.widths[i], 'heights', self.heights[i], 'rotated shape', rotatedMap.shape)
             overlayMap(accomPixelMaps[i], rotatedMap, *newOrigin)
 
-            # Shed map also leaves influence on the outer world although it is reset every frame
-            overlayMap(self.moveMaps[i], self.accomShedMaps[i], -self.origin[0] - accomOrigin[0], -self.origin[1] - accomOrigin[1])
-
             rotatedMap = rotateMap(self.moveMaps[i], self.angle, isPixel=False)
             overlayMap(accomMoveMaps[i], rotatedMap, *newOrigin)
 
@@ -1762,24 +1754,50 @@ class Body:
                 allEmpty = False
         if allEmpty:
             return self.accomPixelMaps, self.accomMoveMaps
-        height, width = macroMoveMaps[0].shape[:2]
+        height, width = macroMoveMaps[-1].shape[:2]
         curX, curY = self.origin
+        tentX, tentY = curX, curY
+
         newPixelMaps, newMoveMaps = [], []
-        newPixelMap = self.accomPixelMaps[0]
-        for curPixelMap, curMoveMap, curMacroMoveMap in zip(self.accomPixelMaps, self.accomMoveMaps, macroMoveMaps):
-            dirY, dirX = avgMovements(newPixelMap, curMacroMoveMap)
+        initPixelMap = self.accomPixelMaps[0]
+        initMacroMoveMap = macroMoveMaps[-1]
+        dirY, dirX = avgMovements(initPixelMap, initMacroMoveMap)
+        initSignY, initSignX = getSign(dirY), getSign(dirX)
+        print('init sign', initSignX, initSignY)
+
+        isInBounds = True
+        isInit = True
+        existsInit = True
+        while existsInit and isInBounds:
+            if isInit:
+                isInit = False
+            else:
+                curY = tentY
+                curX = tentX
+                newPixelMap = np.full(self.accomPixelMaps[0].shape, [0.0, 0])
+                overlayMap(newPixelMap, initPixelMap, round(curX - self.origin[0]), round(curY - self.origin[1]))
+                existsInit = existsMovement(newPixelMap, initMacroMoveMap, initSignX, initSignY)
+
+            if dirY == 0 and dirX == 0:
+                break
             tentY = curY + dirY  # tentative coordinates
             tentX = curX + dirX
-            if (-accomSize[1] / 4 <= tentY < height + accomSize[1] / 4
-                    and -accomSize[0] / 4 <= tentX < width + accomSize[1] / 4):  # inside the frame boundary (or not?)
-                curY = tentY  # if keep doing this, even decimals will accumulate into substantial steps
-                curX = tentX
+
+
+            isInBounds = -accomSize[1] / 4 <= tentY < height + accomSize[1] / 4 \
+                      and -accomSize[0] / 4 <= tentX < width + accomSize[1] / 4  # inside the frame boundary (or not?)
+
+
+        for frameInd in range(tweening):
+            midY = round((curY - self.origin[1]) * (frameInd + 1) / tweening)
+            midX = round((curX - self.origin[0]) * (frameInd + 1) / tweening)
             newPixelMap = np.full(self.accomPixelMaps[0].shape, [0.0, 0])
-            overlayMap(newPixelMap, curPixelMap, round(curX - self.origin[0]), round(curY - self.origin[1]))
+            overlayMap(newPixelMap, self.accomPixelMaps[frameInd], midX, midY)
             newPixelMaps.append(newPixelMap)
             newMoveMap = np.zeros(self.accomMoveMaps[0].shape, dtype=float)
-            overlayMap(newMoveMap, curMoveMap, round(curX - self.origin[0]), round(curY - self.origin[1]))
+            overlayMap(newMoveMap, self.accomMoveMaps[frameInd], midX, midY)
             newMoveMaps.append(newMoveMap)
+
 
         self.propagateMacro(round(curX - self.origin[0]), round(curY - self.origin[1]))
 
@@ -1796,6 +1814,8 @@ class Body:
             body.origin[1] += deltaY
             print('new macro', body.origin, body.tree)
             body.propagateMacro(deltaX, deltaY)
+
+
     def updateHelper(self, tree, pixelMap, moveMap, origin, width, height, treeRest, isUpdating, isInit):
         # isUpdating: replacing trees with the new version, isInit: drawing the first frame
         global bodyDict
@@ -1818,7 +1838,7 @@ class Body:
             elif not isUpdating:  # initializing joints
                 # Add a child joint that still preserves the deeper embedding levels
                 childJoint = Body([tree] + treeRest, [self.origin[0] + origin[0], self.origin[1] + origin[1]],
-                                  width, height, isInit)
+                                  width, height, False, isInit)
                 self.jointLst.append(childJoint)  # second boolean: on the base level
                 bodyDict.setdefault(tree[-1], [[], False])[0].append(childJoint)
             elif not bodyDict[tree[-1]][1]:  # second boolean: already updated the whole body "species"
@@ -1826,11 +1846,11 @@ class Body:
                 for body in bodyDict[tree[-1]][0]:
                     body.update([tree] + treeRest, isInit)
                 bodyDict[tree[-1]][1] = True
-        elif tree[0] == 'body':
+        elif tree[0] in ['body', 'plan']:
             if not isUpdating:
                 # Add a child body that still preserves the deeper embedding levels
                 childBody = Body(tree[:-1] + treeRest + [tree[-1]], [self.origin[0] + origin[0], self.origin[1] + origin[1]],
-                                 width, height, isInit)
+                                 width, height, tree[0] == 'plan', isInit)
                 self.bodyLst.append(childBody)
                 bodyDict.setdefault(tree[-1], [[], False])[0].append(childBody)
             else:
@@ -1902,26 +1922,26 @@ class Body:
                         orientSum[1] = sum(vecMap[reversedHexMap[charMapDyn[tree[0]]]][0])
                     self.angleLst.append(coord2Angle(*orientSum))
                 else:  # let's fill it with movement vectors
-                    if tree[0] in ['z', 'f'] and not isInit:
-                        mask = np.full((height, width), True)
-                        rotatedMask = rotateMap(mask, self.globalAngle)
-                        rotatedMask = np.repeat(rotatedMask[:, :, np.newaxis], 2, axis=2)
+                    if tree[0] in ['z', 'f']:
+                        if not isInit:
+                            mask = np.full((height, width), True)
+                            rotatedMask = rotateMap(mask, self.globalAngle)
+                            rotatedMask = np.repeat(rotatedMask[:, :, np.newaxis], 2, axis=2)
 
-                        print('originee', origin, height, width, rotatedMask.shape)
-                        newOrigin = ((rotatedMask.shape[0] - width) // 2 - origin[0],
-                                    (rotatedMask.shape[1] - height) // 2 - origin[1])
-                        # The view of global map allowed for shedding
-                        viewPixelMap = np.full(rotatedMask.shape, (0.0, 0))
-                        overlayMap(viewPixelMap, globalPixelMap[globalCurLayer], *newOrigin)
-                        viewPixelMap = np.where(rotatedMask, viewPixelMap, [0, 0])
-                        shedMap = np.zeros(viewPixelMap.shape, dtype=float)
-                        planMovements(tree, viewPixelMap, shedMap, origin, width, height, self.globalAngle)
-                        rotatedShedMap = rotateMap(shedMap, -self.globalAngle, isPixel=False)
-                        rotatedMask = rotatedMask[:, :, 0]
-                        rotatedMask = rotateMap(rotatedMask, -self.globalAngle)
-                        cutOriginY, cutOriginX, cutEndY, cutEndX = locateBoundRect(rotatedMask, mode=2)
-                        overlayMap(self.moveMap, rotatedShedMap[cutOriginY:cutEndY, cutOriginX:cutEndX], *origin)
-                        print('hey')
+                            print('originee', origin, height, width, rotatedMask.shape, tree)
+                            newOrigin = (round(self.origin[0] - (rotatedMask.shape[0] - width) / 2),
+                                        round(self.origin[1] - (rotatedMask.shape[1] - height) / 2))
+                            # The view of global map allowed for shedding
+                            viewPixelMap = np.full(rotatedMask.shape, (0.0, 0))
+                            overlayMap(viewPixelMap, globalPixelMap[globalCurLayer], *newOrigin)
+                            viewPixelMap = np.where(rotatedMask, viewPixelMap, [0, 0])
+                            shedMap = np.zeros(viewPixelMap.shape, dtype=float)
+                            planMovements(tree, viewPixelMap, shedMap, origin, viewPixelMap.shape[1], viewPixelMap.shape[0], self.globalAngle)
+                            rotatedShedMap = rotateMap(shedMap, -self.globalAngle, isPixel=False)
+                            rotatedMask = rotatedMask[:, :, 0]
+                            rotatedMask = rotateMap(rotatedMask, -self.globalAngle)
+                            cutOriginY, cutOriginX, cutEndY, cutEndX = locateBoundRect(rotatedMask, mode=2)
+                            overlayMap(self.moveMap, rotatedShedMap[cutOriginY:cutEndY, cutOriginX:cutEndX], *origin)
                     else:
                         planMovements(tree, self.pixelMap, self.moveMap, origin, width, height)
 
@@ -1997,11 +2017,11 @@ def scanOblique(tree, curFrame, moveMap, origin, width, height, requiredLayers=2
     if tree[0] != 'z':
         stages.reverse()
 
-    print('params', angleDeg, stepX, stepY, moveX, moveY, stages, tree, moveMap.shape, curFrame.shape)
+    print('params', angleDeg, stepX, stepY, moveX, moveY, stages, tree, moveMap.shape, curFrame.shape, width, height, origin)
     passedLayers = 0
     for curStage in stages:
         if curStage == 1:
-            curRange = range(width - 1, -1, -1)
+            curRange = range(width - 1, - 1, -1)
             fixedY, fixedX = 0, None
         elif curStage == 2:
             curRange = range(0, height)
@@ -2010,7 +2030,7 @@ def scanOblique(tree, curFrame, moveMap, origin, width, height, requiredLayers=2
             curRange = range(0, width)
             fixedY, fixedX = height - 1, None
         elif curStage == 4:
-            curRange = range(height - 1, -1, -1)
+            curRange = range(height - 1, - 1, -1)
             fixedY, fixedX = None, width - 1
 
         if tree[0] != 'z':  # f uses the opposite order
@@ -2022,12 +2042,14 @@ def scanOblique(tree, curFrame, moveMap, origin, width, height, requiredLayers=2
             curY = fixedY if fixedY is not None else var
             found = False
 
-            while -0.5 <= curX < width and -0.5 <= curY < height:
-                newCoords = round(origin[1] + curY), round(origin[0] + curX)
+            while - 0.5 <= curX < curFrame.shape[1] - 0.5 and - 0.5 <= curY < curFrame.shape[0] - 0.5:
+                newCoords = (round(curY), round(curX))
+                print(curY, curX, height, width, newCoords, curFrame.shape)
                 if curFrame[newCoords][1] > 0:
-                    moveMap[newCoords][0] += moveY
-                    moveMap[newCoords][1] += moveX
                     found = True
+                moveMap[newCoords][0] += moveY
+                moveMap[newCoords][1] += moveX
+
                 curX += stepX
                 curY += stepY
 
@@ -2054,11 +2076,18 @@ def planMovements(tree, curFrame, moveMap, origin, width, height, angleAdd=0):
                           round(division * (i + 1)) - round(division * i), height)
     elif tree[0] in ['ż', 'm', 'ċ']:
         # Random movements (Brownian motion)
+        '''
         intensity = charMapDyn[tree[0]][0]
         for i in range(height):
             for j in range(width):
                 if np.random.rand() < intensity:
                     moveMap[origin[1] + i][origin[0] + j] = [random.choice([-intensity, intensity]), random.choice([-intensity, intensity])]
+        '''
+        intensity = charMapDyn[tree[0]][0]
+        randomDirY, randomDirX = random.choice([-intensity, 0, intensity]), random.choice([-intensity, 0, intensity])
+        for i in range(height):
+            for j in range(width):
+                moveMap[origin[1] + i][origin[0] + j] = [randomDirY, randomDirX]
     elif tree[0] in ['z', 'f']:
         # Only "corrode" the top layer
         scanOblique(tree, curFrame, moveMap, origin, width, height, angleAdd=angleAdd)
@@ -2090,12 +2119,11 @@ def getSign(value):
         return -1
 
 
-def runMovements(pixelMap, moveMap, childMoveMap=None, shedMap=None, emptyMap=None, isBody=False):
+def runMovements(pixelMap, moveMap, childMoveMap=None, emptyMap=None, isBody=False, isPlan=False):
     global tweening
     newPixelMaps = []
     newMoveMaps = []
     newChildMoveMaps = []
-    newShedMaps = []
     newEmptyMaps = []
     height = len(pixelMap)
     width = len(pixelMap[0])
@@ -2103,51 +2131,68 @@ def runMovements(pixelMap, moveMap, childMoveMap=None, shedMap=None, emptyMap=No
         newPixelMaps.append(np.copy(pixelMap))
         if isBody:
             newMoveMaps.append(np.copy(moveMap))
-            newShedMaps.append(np.copy(shedMap))
             newEmptyMaps.append(np.copy(emptyMap))
             if childMoveMap is not None:
                 newChildMoveMaps.append(np.copy(childMoveMap))
 
     if (not isBody and np.all(moveMap == 0) or
             isBody and
-            (childMoveMap is None or np.all(moveMap == 0) and np.all(childMoveMap) and np.all(shedMap == 0))):
+            (childMoveMap is None or np.all(moveMap == 0) and np.all(childMoveMap))):
         # The body does not move in the initial frame
-        return (newPixelMaps, newMoveMaps, newChildMoveMaps, newShedMaps, newEmptyMaps) if isBody else newPixelMaps
+        return (newPixelMaps, newMoveMaps, newChildMoveMaps, newEmptyMaps) if isBody else newPixelMaps
 
     for i in range(height):
         for j in range(width):
-            dirY, dirX = moveMap[i, j][0], moveMap[i, j][1]
-            if isBody:
-                dirY += childMoveMap[i, j][0] + shedMap[i, j][0]
-                dirX += childMoveMap[i, j][1] + shedMap[i, j][1]
+            if not isBody and pixelMap[i][j][1] == 0:  # don't compute empty pixel positions
+                continue
+            curY, curX = i, j
+            tentY, tentX = i, j
+            dirY, dirX = moveMap[round(curY), round(curX)][0], moveMap[round(curY), round(curX)][1]
             if dirY == 0 and dirX == 0:
                 continue
-            tentY = i + dirY  # tentative coordinates
-            tentX = j + dirX
-            success = 0 <= tentY < height and 0 <= tentX < width  # inside the frame boundary
-            curY = tentY if success else i
-            curX = tentX if success else j
+            initSignY, initSignX = getSign(dirY), getSign(dirX)
+            isInBounds = True
+            isInit = True
+            while getSign(dirY) == initSignY and getSign(dirX) == initSignX and isInBounds:
+                if isInit:
+                    isInit = False
+                else:
+                    curY = tentY
+                    curX = tentX
+                    dirY, dirX = moveMap[round(curY), round(curX)][0], moveMap[round(curY), round(curX)][1]
+                    if isBody:
+                        dirY += childMoveMap[round(curY), round(curX)][0]
+                        dirX += childMoveMap[round(curY), round(curX)][1]
+
+                if dirY == 0 and dirX == 0:
+                    break
+
+                tentY = curY + dirY  # tentative coordinates
+                tentX = curX + dirX
+
+                isInBounds = -0.5 <= tentY < height and -0.5 <= tentX < width  # inside the frame boundary
+
+            if curY == i and curX == j:
+                continue
             for frameInd in range(tweening):
                 # Transfer the value at the original position to the new position
                 newPixelMaps[frameInd][i][j] -= pixelMap[i][j]
-                if isBody:  # movement runs on itself like an airflow
-                    newMoveMaps[frameInd][i][j] -= moveMap[i][j]
-                    newChildMoveMaps[frameInd][i][j] -= childMoveMap[i][j]
-                    newShedMaps[frameInd][i][j] -= shedMap[i][j]
+                if isBody:
+                    if not isPlan:  # movement runs on itself like an airflow
+                        newMoveMaps[frameInd][i][j] -= moveMap[i][j]
+                        newChildMoveMaps[frameInd][i][j] -= childMoveMap[i][j]
                     newEmptyMaps[frameInd][i][j] -= emptyMap[i][j]
-                if success:  # if crosses the frame boundary, pixel disappears from the screen
+                if isInBounds:  # if crosses the frame boundary, pixel disappears from the screen
                     midY = round(i + (curY - i) * (frameInd + 1) / tweening)
                     midX = round(j + (curX - j) * (frameInd + 1) / tweening)
-                    midY -= 1 if midY == newPixelMaps[frameInd].shape[0] else 0
-                    midX -= 1 if midX == newPixelMaps[frameInd].shape[1] else 0
                     newPixelMaps[frameInd][midY][midX] += pixelMap[i][j]
                     if isBody:
-                        newMoveMaps[frameInd][midY][midX] += moveMap[i][j]
-                        newChildMoveMaps[frameInd][midY][midX] += childMoveMap[i][j]
-                        newShedMaps[frameInd][midY][midX] += shedMap[i][j]
+                        if not isPlan:
+                            newMoveMaps[frameInd][midY][midX] += moveMap[i][j]
+                            newChildMoveMaps[frameInd][midY][midX] += childMoveMap[i][j]
                         newEmptyMaps[frameInd][midY][midX] += emptyMap[i][j]
 
-    return (newPixelMaps, newMoveMaps, newChildMoveMaps, newShedMaps, newEmptyMaps) if isBody else newPixelMaps
+    return (newPixelMaps, newMoveMaps, newChildMoveMaps, newEmptyMaps) if isBody else newPixelMaps
 
 
 def avgMovements(pixelMap, moveMap):  # Sum up all the forces being applied to the pixels
@@ -2163,6 +2208,14 @@ def avgMovements(pixelMap, moveMap):  # Sum up all the forces being applied to t
     numX = 1 if numX == 0 else numX
     return sumY / numY, sumX / numX
 
+def existsMovement(pixelMap, moveMap, initSignX, initSignY):
+    exists = False
+    for i in range(len(pixelMap)):
+        for j in range(len(pixelMap[0])):
+            if pixelMap[i, j, 1] > 0 and (moveMap[i, j, 0] != 0 or moveMap[i, j, 1] != 0):  # accumulate the movement if it is not a static pixel
+                if getSign(moveMap[i, j, 0]) == initSignY and getSign(moveMap[i, j, 1]) == initSignX:
+                    exists = True
+    return exists
 
 def scanRegions(tree, pixelMap, codeMap, origin, width, height):
     # Find the regions that need to be scanned and compute their output
@@ -2333,6 +2386,8 @@ def compLayers(guideTree, layerMode=True, verbose=False,
     global frameWidth
     global frameHeight
 
+    if guideTree[0] not in ['series', 'parallel', 'body', 'plan']:
+        guideTree = ['series', guideTree]
     guideTree = labelBodies(guideTree)[0]
     print('labelled', guideTree)
     layerLst, minLayer, maxLayer = optimizeLayerRange(getAllLayers(guideTree))
@@ -2374,6 +2429,7 @@ def compLayers(guideTree, layerMode=True, verbose=False,
 
     for curFrameInd in range(keyLen):  # traverse through the layers at every frame
         usefulProbs = {}
+        print('current frame index', curFrameInd)
         for i, layer in enumerate(range(minLayer, maxLayer)):
             globalCurLayer = layer
             if layer - 1 in timetable:
@@ -2536,6 +2592,14 @@ def decorateNetwork(graph, replaceText=True, useSymbols=False):
             if not isinstance(tup[1], list) and tup[1] in replaceDict:
                 if useSymbols:
                     fontFamily[unique] = fontNames[1]
+                    if tup[1] == nodeSymbols[0]:
+                        labels[tup] = '//'
+                    elif tup[1] == nodeSymbols[1]:
+                        labels[tup] = '-'
+                    elif tup[1] == nodeSymbols[2]:
+                        labels[tup] = '*'
+                    elif tup[1] == nodeSymbols[3]:
+                        labels[tup] = '#'
                     labels[tup] = '//' if tup[1] == nodeSymbols[0] else '—'
                 else:
                     fontFamily[unique] = fontNames[0]
@@ -2824,18 +2888,17 @@ def main():
 
 
 
-    # chaos
-    sourceTree = ['parallel', ['n', 0, 0], ['body', ['d', 0, 0], ['r', 1, 0], ['j', 0, 0]], ['body', ['parallel', ['b', 0, 0], ['ż', 0, 0]]]]
 
     # revolving car
-    sourceTree = ['body', ['r', 0, 0], ['r', 1, 0], ['series', ['body', ['parallel', ['body', ['series', ['h', 0, 0]]], ['series', ['t', 0, 0]], ['body',
+    sourceTree = ['body', ['r', 0, 0], ['r', 1, 0], ['r', 0, 0], ['r', 1, 0], ['series', ['body', ['parallel', ['body', ['series', ['h', 0, 0]]], ['series', ['t', 0, 0]], ['body',
                                                                             ['parallel',
                                                                              ['series', ['j', 0, 0]],
                                                                              ['parallel', ['h', 0, -1],
                                                                              ['series', ['t', 0, 0]],['series', ['t', 0, 0]],
                                                                              ['series', ['t', 1, 0]]]],
-                                                                            ['parallel', ['series', ['r', 1, 0]], ['series', ['t', 0, 0]]
+                                                                            ['parallel', ['body', ['series', ['r', 1, 0]]], ['series', ['t', 0, 0]]
                                                                              ]]]], ['n', 0, 0]]]
+
 
 
     # 蠕动
@@ -2848,11 +2911,38 @@ def main():
     # oblique cut
     sourceTree = ['body', ['r', 0, 0], ['r', 1, 0], ['parallel', ['b', 0, 0], ['body', ['parallel', ['t', 0, 0], ['c', 1, 0], ['j', 0, 0]], ['parallel', ['f', 0, 0]]]]]
 
-    # wandering eye
-    sourceTree = ['body',  ['parallel', ['parallel', ['h', 0, -1], ['ż', 0, 0]], ['body',['r', 0, 0], ['r', 1, 0],['r', 0, 0], ['parallel', ['r', 1, 0], ['parallel', ['h', 0, -1], ['t', 1, 0]]], ['b', 0, 0]]]]
+
 
     # 来回
     sourceTree = ['series', ['parallel', ['body', ['j', 0, 0]], ['t', 0, 0]], ['c', 0, 0]]
+    sourceTree = ['body', ['r', 0, 0], ['r', 1, 0], ['series', ['body', ['parallel', ['parallel', ['body', ['h', 0, 0]], ['t', 0, 0]], ['body', ['parallel', ['parallel', ['h', 0, -1], ['t', 1, 0], ['t', 0, 0]], ['j', 0, 0]], ['parallel', ['series', ['body', ['r', 1, 0]]], ['series', ['j', 0, 0]]]]]], ['n', 0, 0]]]
+
+
+    # chaos
+    sourceTree = ['parallel', ['n', 0, 0], ['body', ['d', 0, 0], ['r', 1, 0], ['j', 0, 0]], ['body', ['parallel', ['b', 0, 0], ['ż', 0, 0]]]]
+
+
+
+
+    sourceTree = ['body', ['r', 0, 0], ['body', ['parallel', ['t', 0, 0], ['t', 1, 0], ['j', 0, 0]], ['parallel', ['f', 0, 0], ['b', 0, 0]]]]
+
+    # wandering eye
+    sourceTree = ['body',  ['parallel', ['parallel', ['h', 0, -1], ['ż', 0, 0]], ['body',['r', 0, 0], ['r', 1, 0],['r', 0, 0], ['parallel', ['r', 1, 0], ['parallel', ['h', 0, -1], ['t', 1, 0]]], ['b', 0, 0]]]]
+
+    sourceTree = ['series', ['body', ['r', 0, 0], ['r', 1, 0], ['parallel', ['h', 0, -1], ['parallel', ['body', ['j', 0, 0]], ['t', 0, 0]]]], ['n', 0, 0]]
+
+    sourceTree = ['series', ['parallel', ['h', 0, -1], ['body', ['parallel', ['body', ['j', 0, 0]], ['t', 0, 0]]]], ['n', 0, 0], ['n', 0, 0], ['n', 0, 0]]
+
+
+    # two phases
+    sourceTree = ['parallel', ['plan', ['ṫ', 0, 0], ['parallel', ['body', ['j', 0, 0]], ['t', 0, 0]]],
+                  ['plan', ['l̇', 1, 0], ['c', 0, 0]]]
+
+    # four phases
+    sourceTree = ['parallel', ['plan', ['ṫ', 1, 0], ['series', ['parallel', ['body', ['j', 0, 0]], ['t', 0, 0]], ['parallel', ['body', ['j', 0, 0]], ['t', 1, 0]]]],
+                                ['plan', ['l̇', 1, 0], ['series', ['c', 1, 0], ['c', 0, 0]]]]
+
+    sourceTree = ['series', ['parallel', ['parallel', ['h', 0, -1], ['body', ['parallel', ['j', 0, -1], ['d', 0, 0]]]], ['t', 0, 0]], ['t', 1, 0]]  # --> d should only be generated once
 
     # sourceTree = ['body', ['parallel', ['b', 1, 0], ['parallel', ['h', 0, -1], ['ż', 1, 0]]]]
     # sourceTree = ['body', ['parallel', ['t', 0, 0], ['body', ['d', 0, 0], ['j', 0, 0]]]]
@@ -2864,8 +2954,7 @@ def main():
     #              ['series', ['d', 0, 0], ['g', 0, 0]]]
     # sourceTree = ['parallel', ['series', ['b', 0, 0]], ['series', ['d', 1, 0]]]
     print('source tree', sourceTree)
-    tweening = 1
-    videos, layerLst, zeroLayerTrees = compLayers(sourceTree, keyLen=40, verbose=True, fillDyn=False, mirrorMode=True, fWidth=33, fHeight=33)
+    videos, layerLst, zeroLayerTrees = compLayers(sourceTree, keyLen=16, verbose=True, fillDyn=False, mirrorMode=True, fWidth=33, fHeight=33)
     print("videos", videos)
     print("layer lst", layerLst)
     print("zero", zeroLayerTrees)
@@ -2877,7 +2966,7 @@ def main():
     for i in range(len(zeroLayerTrees)):
         zeroGraphs.append(nx.DiGraph())
     testNodeCol = [bayes.convert2NodeTree(testTree, graph=zeroGraphs[i]) for i, testTree in enumerate(zeroLayerTrees)]
-    bayes.showPlot(graph=graph, videos=videos, layerLst=layerLst, zeroGraphs=zeroGraphs, replaceText=True,
+    bayes.showPlot(graph=graph, videos=videos, layerLst=layerLst, zeroGraphs=zeroGraphs, replaceText=False,
                    mirrorMode=True, useSymbols=False)
     # plt.show()
 
