@@ -337,10 +337,7 @@ def evaluateTree(currentGuideTree, sourceNodeCol, verbose=0, showZero=True, norm
         print("Current tree", currentGuideTree)
 
 
-    videos, layerLst, zeroLayerTrees = compute.calcLayered(currentGuideTree, normalize=normalize,
-                                                          needZero=True, keyLen=keyLen, verbose=verbose > 2,
-                                                          fillDyn=fillDyn, precision=precision,
-                                                          acceleration=acceleration)
+    videos, layerLst, zeroLayerTrees = compute.compLayers(currentGuideTree,keyLen=keyLen, verbose=verbose > 2, fillDyn=fillDyn)
 
     print("test tree", zeroLayerTrees)
     # handwritten: no reverse, generated: needs reverse
@@ -408,7 +405,7 @@ def initSourceTrees(sourceCol, verbose=0, normalize=True, showImage=True, showSo
             if verbose > 0:
                 print('Source Tree', i, sourceTree)
             if showImage and showSource:
-                videos, layerLst = compute.calcLayered(sourceTree, normalize=normalize, keyLen=1, layerMode=False, verbose=verbose > 2, fillDyn=fillDyn, precision=1)
+                videos, layerLst, zeroLayerTrees = compute.compLayers(sourceTree, keyLen=1, layerMode=False, verbose=verbose > 2, fillDyn=fillDyn)
                 sourceVideos[-1] += videos[0]
             if showTree and showSource:
                 graph = nx.DiGraph()
@@ -533,7 +530,7 @@ def getLabelSimilarity(label1, label2):
     dynamicAbsDifSum = 0
     dynamicAbsPatterns = [None, None]
     for i, label in enumerate([label1, label2]):
-        staticPatterns[i] = compute.reversedCharMapDbl[label[0]]
+        staticPatterns[i] = compute.charMapAll[label[0]]
         if len(staticPatterns[i]) == 2:
             staticPatterns[i] = [staticPatterns[i][0], sum(staticPatterns[i]) / 2, staticPatterns[i][1]]
         if isDynamic[i]:
@@ -803,7 +800,7 @@ def main():
                 trainTree = convert2NodeTree(trainTree, labelCounter=labelCounter, graph=graph)
                 nodeLst[0].append(flattenList(extractNodes(trainTree, needTotal=useTotal, needDepth=useDepth)))
             print("new source", nodeLst[0])
-            videos, layerLst, zeroLayerTrees = compute.calcLayered(compareTree, normalize=True, needZero=True, keyLen=4, precision=2, acceleration=2, verbose=False, fillDyn=False, mirrorMode=True)
+            videos, layerLst, zeroLayerTrees = compute.compLayers(compareTree, keyLen=4, verbose=False, fillDyn=False, mirrorMode=True)
             print("videos", videos)
             print("layer lst", layerLst)
             #compute.playLayers(videos, layerLst, showMode=[True, False, False], mirrorMode=True)
