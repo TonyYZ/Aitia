@@ -19,18 +19,15 @@ from matplotlib.widgets import Button
 import networkx as nx
 import matplotlib.colors as mcolors
 from matplotlib.image import imread
-import backups
-import ItiParser
 import imageio
-from pathlib import Path
 import scipy.ndimage
 
-# fontNames = ['Yu Gothic', 'Segoe UI Symbol']
-path1 = '/home/ukiriz/.local/share/fonts/seguisym.ttf'
-prop1 = font_manager.FontProperties(fname=path1)
-path2 = '/home/ukiriz/.local/share/fonts/arial-unicode-ms.ttf'
-prop2 = font_manager.FontProperties(fname=path2)
-fontNames = ['Noto Sans CJK JP', prop1.get_name(), prop2.get_name()]
+fontNames = ['Yu Gothic', 'Segoe UI Symbol']
+# path1 = '/home/ukiriz/.local/share/fonts/seguisym.ttf'
+# prop1 = font_manager.FontProperties(fname=path1)
+# path2 = '/home/ukiriz/.local/share/fonts/arial-unicode-ms.ttf'
+# prop2 = font_manager.FontProperties(fname=path2)
+# fontNames = ['Noto Sans CJK JP', prop1.get_name(), prop2.get_name()]
 
 profiler = LineProfiler()
 
@@ -1136,9 +1133,7 @@ def drawGuideTree(tree, usefulProbs={}, layerMode=False, verbose=False, curPixel
         if verbose:
             print('New Code Map', codeMap, tree)
 
-    video = [Image.fromarray(frame).convert('RGB') for frame in pixelMaps]
-
-    return video, codeMap, tree, background, bodyMoveMap
+    return pixelMaps, codeMap, tree, background, bodyMoveMap
 
 
 def lst2tup(lst):
@@ -2392,6 +2387,7 @@ def compLayers(guideTree, layerMode=True, verbose=False,
     print('labelled', guideTree)
     layerLst, minLayer, maxLayer = optimizeLayerRange(getAllLayers(guideTree))
 
+
     # Filter out the trees that belong to each layer
     layerTrees = {}
     for layer in range(minLayer, maxLayer):
@@ -2659,6 +2655,7 @@ def playLayers(videos, layerLst=[0], showMode=[True, False, True], isSource=Fals
             # Create an empty image plot for the first animation
             # im1 = gridAx.imshow(videos[layer][0], animated=True)
             # print(mirrorMode, layerNum, layerLst, layerNum - 1 - i, ani, len(videos))
+            videos[i] = [Image.fromarray(frame).convert('RGB') for frame in videos[i]]
             for j, frame in enumerate(videos[i]):
                 frame.save('./images/results/simulations/layer ' + str(layerLst[i]) + ' - ' + str(j) + '.png')
             gifPath = './images/results/simulations/' + extraDir + '/layer ' + str(layerLst[i]) + extraName + '.gif'
