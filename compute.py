@@ -1381,6 +1381,10 @@ def cleanTiny(map, threshold=1e-15):
     # Set extremely small values in a matrix to 0
     map[np.abs(map) < threshold] = 0
 
+def cleanTiny(map, threshold=1e-15):
+    # Set extremely small values in a matrix to 0
+    map[np.abs(map) < threshold] = 0
+
 
 def rotateMap(oldMap, angle, isPixel=True):
     # Rotate the temporary maps and cover them on the original maps
@@ -1559,7 +1563,12 @@ class Body:
         for body in self.bodyLst + self.jointLst:
             if body.prevMoveMaps is None:
                 continue
+<<<<<<< HEAD
             self.childMoveMap += body.prevMoveMaps[-1]
+=======
+            self.childMoveMap[self.accomOrigin[1]:self.accomOrigin[1] + frameHeight,
+                             self.accomOrigin[0]:self.accomOrigin[0] + frameWidth] += body.prevMoveMaps[-1]
+>>>>>>> some debugging and cancelling shed independence
 
 
 
@@ -1568,6 +1577,9 @@ class Body:
         self.accomPixelMaps = [np.full(self.accomSize, [0.0, 0]) for _ in range(tweening)]
         self.accomMoveMaps = [np.zeros(self.accomSize, dtype=float) for _ in range(tweening)]
 
+
+        cleanTiny(self.pixelMap)
+        cleanTiny(self.moveMap)
 
         cleanTiny(self.pixelMap)
         cleanTiny(self.moveMap)
@@ -1599,6 +1611,7 @@ class Body:
         if self.bodyLst and any([not b.isPlan for b in self.bodyLst]):
             for i in range(tweening):
                 childMacroMoveMaps.append(np.zeros((frameHeight, frameWidth, 2), dtype=float))
+<<<<<<< HEAD
                 if self.isPlan:
                     overlayMap(childMacroMoveMaps[-1], macroMoveMaps[-1], 0, 0)
                 else:
@@ -1607,6 +1620,15 @@ class Body:
                     if childMoveMaps:
                         overlayMap(childMacroMoveMaps[-1], childMoveMaps[i], -self.accomOrigin[0],
                                                                             -self.accomOrigin[1])
+=======
+                overlayMap(childMacroMoveMaps[-1], self.accomMoveMaps[i], -self.accomOrigin[0],
+                                                                          -self.accomOrigin[1])
+                #overlayMap(childMacroMoveMaps[-1], self.accomShedMaps[i], -self.accomOrigin[0],
+                #                                                          -self.accomOrigin[1])
+                if childMoveMaps:
+                    overlayMap(childMacroMoveMaps[-1], childMoveMaps[i], -self.accomOrigin[0],
+                                                                        -self.accomOrigin[1])
+>>>>>>> some debugging and cancelling shed independence
 
 
         # Movements of child bodies and rotation
@@ -1647,6 +1669,7 @@ class Body:
 
         self.propagateOverlay(self.accomPixelMaps, self.accomMoveMaps, self.accomOrigin)
 
+<<<<<<< HEAD
         if not self.isPlan:
             # Movements of the entire body
             newMacroMoveMaps = []
@@ -1665,6 +1688,24 @@ class Body:
 
             print('eecc', np.sum(newMacroMoveMaps[-1][:,:,0]), self.tree)
             self.accomPixelMaps, self.accomMoveMaps = self.runMacroMovements(newMacroMoveMaps, self.accomSize)
+=======
+        # Movements of the entire body
+        newMacroMoveMaps = []
+        for i, m in enumerate(macroMoveMaps):
+            newMacroMoveMaps.append(np.zeros(self.accomSize, dtype=float))
+            if self.prevMoveMaps is None:
+                overlayMap(newMacroMoveMaps[-1], m, *self.accomOrigin)
+            else:  # counteract the part of macro-movements that come from the body's own movements
+                if isGlobal:
+                    overlayMap(newMacroMoveMaps[-1], m - self.prevMoveMaps[i], *self.accomOrigin)
+                else:
+                    overlayMap(newMacroMoveMaps[-1], m -
+                               self.accomMoveMaps[i][self.accomOrigin[1]:self.accomOrigin[1] + frameHeight,
+                                         self.accomOrigin[0]:self.accomOrigin[0] + frameWidth], *self.accomOrigin)
+
+        print('eecc', np.sum(newMacroMoveMaps[-1][:,:,0]), self.tree)
+        self.accomPixelMaps, self.accomMoveMaps = self.runMacroMovements(newMacroMoveMaps, self.accomSize)
+>>>>>>> some debugging and cancelling shed independence
 
         # Body saves its previous movement map
         self.prevMoveMaps = self.accomMoveMaps
@@ -1910,8 +1951,13 @@ class Body:
                                                   width, round(division * (i + 1)) - round(division * i), treeRest[1:],
                                                   isUpdating, isInit)
                 elif isSource:  # we reached the base level, so let's fill it with pixels
+<<<<<<< HEAD
                     addHex(tree, width, height, self.pixelMap, origin)
             elif tree[0] in charMapDyn and isSource or tree[0] in ['z', 'f'] and self.age == 1:
+=======
+                    addHex(tree, width, height, self.pixelMap, origin, isBody=True)
+            elif tree[0] in charMapDyn and isSource:  # or len(treeRest) == 0 and tree[0] in ['z', 'f']:
+>>>>>>> some debugging and cancelling shed independence
                 # Since both base-level and upper elements have observable effects, we need to check if they are sources
                 if len(treeRest) > 0:
                     orientSum = [0, 0]
@@ -1922,6 +1968,7 @@ class Body:
                         orientSum[1] = sum(vecMap[reversedHexMap[charMapDyn[tree[0]]]][0])
                     self.angleLst.append(coord2Angle(*orientSum))
                 else:  # let's fill it with movement vectors
+<<<<<<< HEAD
                     if tree[0] in ['z', 'f']:
                         if not isInit:
                             mask = np.full((height, width), True)
@@ -1942,6 +1989,15 @@ class Body:
                             rotatedMask = rotateMap(rotatedMask, -self.globalAngle)
                             cutOriginY, cutOriginX, cutEndY, cutEndX = locateBoundRect(rotatedMask, mode=2)
                             overlayMap(self.moveMap, rotatedShedMap[cutOriginY:cutEndY, cutOriginX:cutEndX], *origin)
+=======
+                    if False and tree[0] in ['ż', 'm', 'z', 'f'] and not isInit:
+                        # The view of global map allowed for shedding
+                        viewPixelMap = np.full((height, width, 2), (0.0, 0))
+                        overlayMap(viewPixelMap, globalPixelMap, -origin[0], -origin[1])
+                        planMovements(tree, viewPixelMap,
+                                      self.shedMap, origin, width, height)
+                        print('shed', np.sum(self.shedMap))
+>>>>>>> some debugging and cancelling shed independence
                     else:
                         planMovements(tree, self.pixelMap, self.moveMap, origin, width, height)
 
@@ -2889,6 +2945,18 @@ def main():
 
 
 
+<<<<<<< HEAD
+=======
+
+
+
+
+    # chaos
+    sourceTree = ['parallel', ['n', 0, 0], ['body', ['d', 0, 0], ['r', 1, 0], ['j', 0, 0]], ['body', ['parallel', ['b', 0, 0], ['ż', 0, 0]]]]
+
+
+
+>>>>>>> some debugging and cancelling shed independence
     # revolving car
     sourceTree = ['body', ['r', 0, 0], ['r', 1, 0], ['r', 0, 0], ['r', 1, 0], ['series', ['body', ['parallel', ['body', ['series', ['h', 0, 0]]], ['series', ['t', 0, 0]], ['body',
                                                                             ['parallel',
@@ -2906,6 +2974,7 @@ def main():
 
     sourceTree = ['series', ['n', 0, 0], ['body', ['parallel', ['t', 1, 0], ['j', 0, 0]], ['series', ['body', ['parallel', ['b', 1, 0], ['t', 1, 0]]], ['n', 0, 0]]], ['n', 0, 0]]
     sourceTree = ['parallel', ['body', ['parallel', ['t', 1, 0], ['j', 0, 0]], ['series', ['n', 0, 0], ['body', ['parallel', ['b', 0, 0], ['t', 0, 0], ['z', 0, 0], ['f', 0, 0]]], ['n', 0, 0]]], ['body', ['r', 0, 0], ['r', 0, 0]]]
+<<<<<<< HEAD
 
 
     # oblique cut
@@ -2945,6 +3014,11 @@ def main():
     sourceTree = ['series', ['parallel', ['parallel', ['h', 0, -1], ['body', ['parallel', ['j', 0, -1], ['d', 0, 0]]]], ['t', 0, 0]], ['t', 1, 0]]  # --> d should only be generated once
 
     # sourceTree = ['body', ['parallel', ['b', 1, 0], ['parallel', ['h', 0, -1], ['ż', 1, 0]]]]
+=======
+    # oblique cut
+    sourceTree = ['parallel', ['c', 0, 0], ['c', 1, 0], ['body', ['parallel', ['b', 0, 0], ['body', ['parallel', ['t', 0, 0], ['t', 1, 0], ['j', 0, 0]], ['parallel', ['t', 0, 0]]]]]]
+    sourceTree = ['body', ['parallel', ['b', 1, 0], ['parallel', ['h', 0, -1], ['ż', 1, 0]]]]
+>>>>>>> some debugging and cancelling shed independence
     # sourceTree = ['body', ['parallel', ['t', 0, 0], ['body', ['d', 0, 0], ['j', 0, 0]]]]
     #sourceTree = ['series', ['body', ['series', ['parallel', ['t', 0, 0], ['t', 0, 0], ['t', 0, 0], ['t', 0, 0], ['t', 1, 0], ['j', 0, 0]],
     #                                  ['parallel', ['t', 0, 0], ['j', 0, 0]]], ['parallel', ['b', 0, 0], ['t', 1, 0]]]]
