@@ -3,444 +3,483 @@ demos.py — Concept Representation Demos
 ========================================
 
 Illustrates how to build ConceptGraphs for spatial image schemas and verify
-that evaluations behave as intended.
+that evaluations behave as intended under the current model.
 
 Run with:  python demos.py
 
-Key conventions
----------------
-Band reading direction:
-    VERTICAL   pattern[0]=bottom  pattern[n-1]=top
-    HORIZONTAL pattern[0]=left    pattern[n-1]=right
+Current model summary
+---------------------
+ObjectNode: only yang (>0) bands contribute to scanning.
+    activation = value × mean(1 - |field_band_i - 1| for yang bands only)
+    Yin bands are passive — they do not scan at all.
+    VOID (all-zero) returns 0 for the same reason: no yang bands.
 
-Background: any all-zero pattern (坤, 阴, 太阴, …) returns 0 — yin is
-passive; it does not scan.  Dimness at a location is captured implicitly
-when a yang-scanner there returns a low value.
+Node.value (default 1.0): set by incoming dashed edges.
+    value = mean(source.activation for all incoming dashed edges)
+    Governs Plan/Body replacement probability and ObjectNode output scaling.
 
-There is no `layer` attribute on ObjectNode.  Conditional relationships
-between nodes are expressed exclusively via dashed edges.
+DashedEdge: no gain parameter. Simply sets target.value = source.activation
+    (or mean of multiple sources).
+
+Plan/Body replacement rule: for template T (value p) and content C:
+    activation = p × yang_scan(T, C, field)
+               + (1-p) × C.evaluate(full_field)
+    yang_scan = mean of C evaluated on each yang sub-region of T.
+    All-yin template → yang_scan = 0 → result = (1-p) × full_scan.
+
+SerialNode: averages child activations (no longer min).
+
+ReturnNode: output sink, placed as sibling of scanners inside a ParallelNode.
+    The ParallelNode writes its scanner average into the ReturnNode.
+    ConceptGraph.evaluate() returns the last ReturnNode's activation.
+
+Evaluation: three passes — (1) scan with values=1, (2) update values from
+    dashed edges, (3) re-scan with updated values.
 """
 
 import numpy as np
 import textwrap
 from embodied_lot import (
-    ConceptGraph, ObjectNode, SerialNode, ParallelNode, BodyNode,
+    ConceptGraph, ObjectNode, SerialNode, ParallelNode, BodyNode, PlanNode,
     ReceptiveFieldNode, RetinaNode, TactileNode,
-    ReceptiveField, Orientation,
-    TRIGRAM_PATTERNS, MONOGRAM_PATTERNS,
+    ReturnNode, ReceptiveField, Orientation,
+    TRIGRAM_PATTERNS,
+)
+from trigrams import (
+    TOP, BOTTOM, LEFT, RIGHT, CENTER_V, CENTER_H,
+    UNIVERSAL, VOID, PERIPHERY_V, MAJORITY_UPPER, MAJORITY_LOWER,
+    NEUTRAL, V, H,
 )
 
 
 # ── Display helpers ───────────────────────────────────────────────────
 
 def header(title):
-    print(); print("=" * 62); print(f"  {title}"); print("=" * 62)
+    print(); print("=" * 64); print(f"  {title}"); print("=" * 64)
 
 def result(label, value, note=""):
     bar  = "█" * round(value * 20)
     pad  = "░" * (20 - round(value * 20))
     note = f"   ← {note}" if note else ""
-    print(f"  {label:<38s}  {value:.3f}  |{bar}{pad}|{note}")
+    print(f"  {label:<40s}  {value:.3f}  |{bar}{pad}|{note}")
 
 def section(text):
     print(f"\n  ── {text}")
 
 def field(recipe):
     a = np.zeros((9, 9))
-    if   recipe == "top_bright":    a[:3,  :] = 0.9; a[3:,  :] = 0.1
-    elif recipe == "bottom_bright": a[6:,  :] = 0.9; a[:6,  :] = 0.1
-    elif recipe == "left_bright":   a[:,  :3] = 0.9; a[:, 3:]  = 0.1
-    elif recipe == "right_bright":  a[:, 6:]  = 0.9; a[:, :6]  = 0.1
-    elif recipe == "center_bright": a[:,   :] = 0.1; a[3:6, 3:6] = 0.9
-    elif recipe == "uniform_high":  a[:,   :] = 0.9
-    elif recipe == "uniform_mid":   a[:,   :] = 0.5
-    elif recipe == "uniform_low":   a[:,   :] = 0.1
-    elif recipe == "outer_bright":
-        a[:, :] = 0.1; a[0,:]=a[-1,:]=a[:,0]=a[:,-1]=0.9
+    if   recipe == "top":    a[:3,  :] = 0.9; a[3:,  :] = 0.1
+    elif recipe == "bot":    a[6:,  :] = 0.9; a[:6,  :] = 0.1
+    elif recipe == "left":   a[:,  :3] = 0.9; a[:, 3:]  = 0.1
+    elif recipe == "right":  a[:, 6:]  = 0.9; a[:, :6]  = 0.1
+    elif recipe == "center": a[:,   :] = 0.1; a[3:6, 3:6] = 0.9
+    elif recipe == "uni":    a[:,   :] = 0.9
+    elif recipe == "mid":    a[:,   :] = 0.5
+    elif recipe == "low":    a[:,   :] = 0.1
+    elif recipe == "outer":
+        a[:,:]=0.1; a[0,:]=a[-1,:]=a[:,0]=a[:,-1]=0.9
     return ReceptiveField(a)
 
 def single(pattern, ori, name=""):
-    """One-node concept: ParallelNode [retina] + ObjectNode scanner."""
-    g = ConceptGraph(name or str(pattern))
+    """Minimal concept: ParallelNode [retina] + one ObjectNode scanner."""
+    g   = ConceptGraph(name or str(pattern))
     par = ParallelNode("par")
     sc  = ObjectNode("sc", pattern, ori, name=name or str(pattern))
-    g.add_nodes([par, sc]); g.add_solid_edge(par, sc); g.root = par
+    g.add_nodes([par, sc])
+    g.add_solid_edge(par, sc)
+    g.root = par
     return g
 
 
-# =============================================================
-# Demo 1 — VERTICAL POSITION with trigrams used directly
-# =============================================================
-header("Demo 1 — Vertical Position: 'above' and 'below'")
+# =================================================================
+# Demo 1 — Yang-only scanning: what the new ObjectNode does
+# =================================================================
+header("Demo 1 — Yang-only scanning")
 print(textwrap.dedent("""
-  Convention reminder:
-    VERTICAL  pattern[0]=bottom  pattern[2]=top
+  Only yang (>0) positions in the pattern contribute to the activation.
+  Yin positions are skipped entirely — they are passive.
 
-  艮 (0,0,1) — bottom yin, middle yin, top yang  → "figure at the top"
-  震 (1,0,0) — bottom yang, middle yin, top yin  → "figure at the bottom"
+  Convention (VERTICAL):
+    pattern[0] = bottom band   pattern[2] = top band
 
-  Both scan the entire field at once.  No need for a SerialNode here:
-  the three-band gradient structure is precisely what the trigram encodes.
+  TOP  (0,0,1): only band[2] scans → detects brightness at top
+  BOTTOM (1,0,0): only band[0] scans → detects brightness at bottom
+  VOID (0,0,0): no yang bands → always returns 0
 
-  Comparison field breakdown (9 rows, 3 equal bands of 3):
-    top_bright:    top-band (rows 0-2)=0.9  mid(rows 3-5)=0.1  bot(rows 6-8)=0.1
-    bottom_bright: top-band=0.1  mid=0.1  bot=0.9
+  Scoring for TOP on top-bright field (top-band mean ≈ 0.9):
+    sim = 1 - |0.9 - 1| = 0.9
+    activation = value(1.0) × 0.9 = 0.9
 """))
 
-above = single(TRIGRAM_PATTERNS["top"], Orientation.VERTICAL, "top")
-below = single(TRIGRAM_PATTERNS["bottom"], Orientation.VERTICAL, "bottom")
-
-section("top (0,0,1) — above schema  [艮 Gèn]")
+section("TOP (0,0,1) VERTICAL — detects figure at top")
+top_g = single(TOP, V, "top")
 for recipe, note in [
-    ("top_bright",    "top-band=0.9 matches yang→HIGH"),
-    ("bottom_bright", "top-band=0.1 mismatches yang→LOW"),
-    ("uniform_mid",   "all bands 0.5→MODERATE"),
-    ("uniform_high",  "all bands 0.9: top-band✓ mid/bot also match yin? no→HIGH"),
+    ("top",  "top-band bright → HIGH"),
+    ("bot",  "top-band dim    → LOW"),
+    ("uni",  "top-band=0.9 but mid,bot yang? no — only band[2] counts → 0.9"),
+    ("low",  "everything dim  → LOW"),
 ]:
-    result(recipe, above.evaluate_against(field(recipe)), note)
+    result(recipe, top_g.evaluate_against(field(recipe)), note)
 
-section("bottom (1,0,0) — below schema  [震 Zhèn]")
+section("BOTTOM (1,0,0) VERTICAL — detects figure at bottom")
+bot_g = single(BOTTOM, V, "bottom")
 for recipe, note in [
-    ("bottom_bright", "bot-band=0.9 matches yang→HIGH"),
-    ("top_bright",    "bot-band=0.1 mismatches yang→LOW"),
-    ("uniform_high",  "all 0.9: bot matches✓ mid/top also high"),
+    ("bot",  "bottom-band bright → HIGH"),
+    ("top",  "bottom-band dim    → LOW"),
 ]:
-    result(recipe, below.evaluate_against(field(recipe)), note)
+    result(recipe, bot_g.evaluate_against(field(recipe)), note)
 
-# Show exact band means for verification
-section("Exact band means (bottom→top) for top_bright and bottom_bright:")
-for recipe in ("top_bright", "bottom_bright"):
-    f9 = field(recipe).activation
-    bot = f9[6:9, :].mean(); mid = f9[3:6, :].mean(); top = f9[0:3, :].mean()
-    print(f"  {recipe}: band[0]=bottom={bot:.1f}  band[1]=mid={mid:.1f}  band[2]=top={top:.1f}")
-print("  艮 pattern: (0,0,1) → sims: (1-|bot-0|, 1-|mid-0|, 1-|top-1|)")
+section("VOID (0,0,0) — all yin, no yang bands → always 0")
+void_g = single(VOID, V, "void")
+for recipe in ["top", "uni"]:
+    result(recipe, void_g.evaluate_against(field(recipe)), "always 0")
+
+section("Contrast: UNIVERSAL (1,1,1) — all three bands scan")
+uni_g = single(UNIVERSAL, V, "universal")
+for recipe, note in [
+    ("uni",  "all bands 0.9 → all sims 0.9 → mean 0.9"),
+    ("top",  "band0=0.1(sim0.1) band1=0.1(sim0.1) band2=0.9(sim0.9) → mean 0.367"),
+    ("mid",  "all bands 0.5 → mean sim 0.5"),
+]:
+    result(recipe, uni_g.evaluate_against(field(recipe)), note)
 
 
-# =============================================================
-# Demo 2 — HORIZONTAL POSITION
-# =============================================================
-header("Demo 2 — Horizontal Position: 'left-of' and 'right-of'")
+# =================================================================
+# Demo 2 — Node.value scales activation
+# =================================================================
+header("Demo 2 — Node.value scales activation (set by dashed edges)")
 print(textwrap.dedent("""
-  HORIZONTAL  pattern[0]=left  pattern[2]=right
+  When a dashed edge points to a node, its value becomes the source's
+  activation.  The node's output is then scaled by its value:
+      activation = value × yang_scan
 
-  震 (1,0,0) HORIZONTAL — left yang, center yin, right yin → "figure on left"
-  艮 (0,0,1) HORIZONTAL — left yin,  center yin, right yang → "figure on right"
-"""))
-
-left_of  = single(TRIGRAM_PATTERNS["bottom"], Orientation.HORIZONTAL, "left")
-right_of = single(TRIGRAM_PATTERNS["top"], Orientation.HORIZONTAL, "right")
-
-section("left/bottom (1,0,0) HORIZONTAL — left-of  [震H]")
-for recipe, note in [
-    ("left_bright",  "left-band=0.9 matches yang→HIGH"),
-    ("right_bright", "left-band=0.1 mismatches→LOW"),
-    ("top_bright",   "all column-bands ≈ equal mean→MODERATE"),
-]:
-    result(recipe, left_of.evaluate_against(field(recipe)), note)
-
-section("right/top (0,0,1) HORIZONTAL — right-of  [艮H]")
-for recipe, note in [
-    ("right_bright", "right-band=0.9→HIGH"),
-    ("left_bright",  "right-band=0.1→LOW"),
-]:
-    result(recipe, right_of.evaluate_against(field(recipe)), note)
-
-
-# =============================================================
-# Demo 3 — CENTER PRESENCE (坎)
-# =============================================================
-header("Demo 3 — Center Presence: 坎 (0,1,0)")
-print(textwrap.dedent("""
-  坎 (0,1,0) — bottom yin, middle yang, top yin.
-  Applied both VERTICAL and HORIZONTAL and averaged (ParallelNode):
-  high when center row AND center column are bright.
-"""))
-
-def build_center():
-    g = ConceptGraph("center")
-    root = ParallelNode("root"); blend = ParallelNode("blend")
-    cv = ObjectNode("cv", TRIGRAM_PATTERNS["center"], Orientation.VERTICAL,   name="center-V")
-    ch = ObjectNode("ch", TRIGRAM_PATTERNS["center"], Orientation.HORIZONTAL, name="center-H")
-    g.add_nodes([root, blend, cv, ch])
-    g.add_solid_edge(root, blend)
-    g.add_solid_edge(blend, cv); g.add_solid_edge(blend, ch)
-    g.root = root; return g
-
-center = build_center()
-for recipe, note in [
-    ("center_bright", "center occupied→HIGH"),
-    ("outer_bright",  "periphery only→LOW"),
-    ("top_bright",    "top row bright but center-col not isolated→partial"),
-    ("uniform_high",  "middle band matches but so do edges→LOW"),
-]:
-    result(recipe, center.evaluate_against(field(recipe)), note)
-
-
-# =============================================================
-# Demo 4 — UNIVERSALITY (乾)
-# =============================================================
-header("Demo 4 — Universality: 乾 (1,1,1)")
-print(textwrap.dedent("""
-  乾 (1,1,1) — all bands yang.  Scores HIGH when the field is uniformly bright.
-"""))
-
-all_g = single(TRIGRAM_PATTERNS["universal"], Orientation.VERTICAL, "universal")
-for recipe, note in [
-    ("uniform_high",  "fully saturated→HIGH"),
-    ("uniform_mid",   "half saturated→MODERATE"),
-    ("top_bright",    "only top-band bright, mid+bot yin mismatch→LOW"),
-    ("uniform_low",   "nothing→LOW"),
-]:
-    result(recipe, all_g.evaluate_against(field(recipe)), note)
-
-
-# =============================================================
-# Demo 5 — SERIAL NODE: "A above B" (two distinct scanners)
-# =============================================================
-header("Demo 5 — SerialNode: 'bright top AND bright bottom' AND gate")
-print(textwrap.dedent("""
-  SerialNode VERTICAL splits into two strips:
-    children[0] = bottom strip   children[1] = top strip
-
-  Both children use 乾 (all-yang) so we can see the strip assignment clearly.
-  Activation = min(乾_bottom, 乾_top) — both strips must be bright.
-
-  Expected:
-    uniform_high   → both strips bright → min(0.9, 0.9) = 0.9
-    top_bright     → bottom strip dim   → min(low,  0.9) = low
-    bottom_bright  → top strip dim      → min(high, low) = low
-"""))
-
-def build_two_region_and():
-    g = ConceptGraph("two_region_AND")
-    par = ParallelNode("par")
-    ser = SerialNode("ser", split_orientation=Orientation.VERTICAL)
-    bot = ObjectNode("bot", TRIGRAM_PATTERNS["universal"], Orientation.VERTICAL, name="universal-bot")
-    top = ObjectNode("top", TRIGRAM_PATTERNS["universal"], Orientation.VERTICAL, name="universal-top")
-    g.add_nodes([par, ser, bot, top])
-    g.add_solid_edge(par, ser)
-    g.add_solid_edge(ser, bot)   # children[0] = bottom strip
-    g.add_solid_edge(ser, top)   # children[1] = top strip
-    g.root = par; return g
-
-and_g = build_two_region_and()
-for recipe, note in [
-    ("uniform_high",  "both strips bright→HIGH"),
-    ("top_bright",    "bottom strip dim→LOW (min bottleneck)"),
-    ("bottom_bright", "top strip dim→LOW (min bottleneck)"),
-    ("uniform_low",   "both dim→LOW"),
-]:
-    result(recipe, and_g.evaluate_against(field(recipe)), note)
-
-section("Using different scanners: top(艮) on bottom strip, bottom(震) on top strip")
-print(textwrap.dedent("""    (This encodes: bottom strip should look top-heavy (艮) AND
-     top strip should look bottom-heavy (震) — a deliberately odd concept
-     to show that each child scans its own strip independently.)"""))
-
-def build_mixed_serial():
-    g = ConceptGraph("mixed_serial")
-    par = ParallelNode("par")
-    ser = SerialNode("ser", split_orientation=Orientation.VERTICAL)
-    bot = ObjectNode("bot", TRIGRAM_PATTERNS["top"], Orientation.VERTICAL, name="top on bot-strip")
-    top = ObjectNode("top", TRIGRAM_PATTERNS["bottom"], Orientation.VERTICAL, name="bottom on top-strip")
-    g.add_nodes([par, ser, bot, top])
-    g.add_solid_edge(par, ser); g.add_solid_edge(ser, bot); g.add_solid_edge(ser, top)
-    g.root = par; return g
-
-mix = build_mixed_serial()
-for recipe, note in [
-    ("top_bright",    "bot-strip(rows 4-8)=dim; 艮 on dim strip; 震 on top-strip(dim+bright)"),
-    ("uniform_mid",   "all 0.5→moderate for both scanners"),
-]:
-    result(recipe, mix.evaluate_against(field(recipe)), note)
-
-
-# =============================================================
-# Demo 6 — BODY NODE: spatial template unfolding
-# =============================================================
-header("Demo 6 — BodyNode: template directs where content is evaluated")
-print(textwrap.dedent("""
-  BodyNode children:
-    child[0] = spatial template (determines WHERE child[1] scans)
-    child[1] = content scanner (evaluated in the yang-regions of the template)
-
-  Schema: 艮 (0,0,1) as template → yang region = top third of the field.
-          乾 (1,1,1) as content → evaluated only within the top-third sub-field.
-
-  Result: high when the TOP THIRD of the field is bright (regardless of the rest).
-"""))
-
-def build_body():
-    g = ConceptGraph("body_above")
-    par  = ParallelNode("par")
-    body = BodyNode("body", subfield_shape=(9, 9))
-    tmpl = ObjectNode("tmpl", TRIGRAM_PATTERNS["top"], Orientation.VERTICAL, name="top-template")
-    cont = ObjectNode("cont", TRIGRAM_PATTERNS["universal"], Orientation.VERTICAL, name="universal-content")
-    g.add_nodes([par, body, tmpl, cont])
-    g.add_solid_edge(par, body); g.add_solid_edge(body, tmpl); g.add_solid_edge(body, cont)
-    g.root = par; return g
-
-body_g = build_body()
-for recipe, note in [
-    ("top_bright",    "top third bright → 乾 on bright sub-field → HIGH"),
-    ("bottom_bright", "top third dim    → 乾 on dim sub-field   → LOW"),
-    ("center_bright", "top third dim (center is rows 3-6) → LOW"),
-    ("uniform_high",  "top third bright → HIGH"),
-    ("uniform_low",   "top third dim    → LOW"),
-]:
-    result(recipe, body_g.evaluate_against(field(recipe)), note)
-
-section("Using bottom(震) as template → content placed in BOTTOM third")
-def build_body_below():
-    g = ConceptGraph("body_below")
-    par  = ParallelNode("par")
-    body = BodyNode("body2", subfield_shape=(9, 9))
-    tmpl = ObjectNode("tmpl", TRIGRAM_PATTERNS["bottom"], Orientation.VERTICAL, name="bottom-template")
-    cont = ObjectNode("cont", TRIGRAM_PATTERNS["universal"], Orientation.VERTICAL, name="universal-content")
-    g.add_nodes([par, body, tmpl, cont])
-    g.add_solid_edge(par, body); g.add_solid_edge(body, tmpl); g.add_solid_edge(body, cont)
-    g.root = par; return g
-
-body_below = build_body_below()
-for recipe, note in [
-    ("bottom_bright", "bottom third bright → HIGH"),
-    ("top_bright",    "bottom third dim    → LOW"),
-]:
-    result(recipe, body_below.evaluate_against(field(recipe)), note)
-
-
-# =============================================================
-# Demo 7 — CONDITIONAL GATING via dashed edge → field node
-# =============================================================
-header("Demo 7 — Dashed Edge: conditional modulation of field presence")
-print(textwrap.dedent("""
-  Dashed edges modulate node.activation AFTER the forward pass.
-  For field nodes, .activation IS the persistent presence weight.
-  So dashing a condition to a field node gates which modality is active
-  on subsequent evaluation calls.
-
-  Setup:
-    ParallelNode
-        ├── RetinaNode  (top_bright, w=1.0)
-        ├── TactileNode (bottom_bright, w=0.5)
-        ├── 艮 scanner  (detects bright top)
-        └── 乾 condition (fires strongly on uniform_high, weakly on dim fields)
-    DashedEdge: 乾 ⤳ TactileNode (gain=0.0) — suppresses tactile
-
-  Cycle 1 forward: condition fires; tactile still w=0.5; result = blend
-  Cycle 1 dashed:  tactile.activation ×= (乾_act × 0.0) = 0
-  Cycle 2 forward: tactile.activation=0 → ParallelNode ignores tactile
-                   → only retina contributes → result ≈ retina-only score
+  Example: UNIVERSAL scanner, gated by a BOTTOM condition.
+    On top-bright field:  BOTTOM scanner fires low (~0.1)
+                          → UNIVERSAL.value = 0.1
+                          → UNIVERSAL.activation ≈ 0.1 × 0.367 ≈ 0.037
+    On bot-bright field:  BOTTOM scanner fires high (~0.9)
+                          → UNIVERSAL.value ≈ 0.9
+                          → UNIVERSAL.activation ≈ 0.9 × 0.9 ≈ 0.810
 """))
 
 def build_gated():
     g    = ConceptGraph("gated")
     par  = ParallelNode("par")
-    ser  = SerialNode("ser", split_orientation=Orientation.VERTICAL)
-    # scanner: 艮 on top strip, 震 on bottom strip — the "above" concept
-    sc_top = ObjectNode("top", TRIGRAM_PATTERNS["top"], Orientation.VERTICAL, name="top")
-    sc_bot = ObjectNode("bot", TRIGRAM_PATTERNS["bottom"], Orientation.VERTICAL, name="bottom")
-    cond   = ObjectNode("cond", TRIGRAM_PATTERNS["universal"], Orientation.VERTICAL, name="universal-cond")
-    ret    = RetinaNode("retina",  field=field("top_bright"),    initial_weight=1.0)
-    tac    = TactileNode("tactile", field=field("bottom_bright"), initial_weight=0.5)
-    g.add_nodes([par, ser, sc_top, sc_bot, cond, ret, tac])
-    g.add_solid_edge(par, ret); g.add_solid_edge(par, tac)
+    cond = ObjectNode("cond", BOTTOM, V, name="bottom-cond")
+    tgt  = ObjectNode("tgt",  UNIVERSAL, V, name="universal-tgt")
+    g.add_nodes([par, cond, tgt])
     g.add_solid_edge(par, cond)
-    g.add_solid_edge(par, ser)
-    g.add_solid_edge(ser, sc_bot)   # bottom strip
-    g.add_solid_edge(ser, sc_top)   # top strip
-    g.add_dashed_edge(cond, tac, gain=0.0)
-    g.root = par; return g
+    g.add_solid_edge(par, tgt)
+    g.add_dashed_edge(cond, tgt)   # tgt.value = cond.activation
+    g.root = par
+    return g
 
 gated = build_gated()
-act1 = gated.evaluate()
-result("Cycle 1 (retina w=1, tactile w=0.5)", act1, "weighted blend of two opposing fields")
-print(f"    tactile.activation after dashed pass: {gated._nodes['tactile'].activation:.3f}  (→ 0)")
-act2 = gated.evaluate()
-result("Cycle 2 (tactile now w=0)", act2, "only retina contributes")
-
-section("Verify: single-field 'above' score for each modality separately:")
-ab = ConceptGraph("above_ref")
-par_r = ParallelNode("par")
-ser_r = SerialNode("ser", split_orientation=Orientation.VERTICAL)
-a_bot = ObjectNode("b", TRIGRAM_PATTERNS["top"], Orientation.VERTICAL, name="top")
-a_top = ObjectNode("t", TRIGRAM_PATTERNS["bottom"], Orientation.VERTICAL, name="bottom")
-ab.add_nodes([par_r, ser_r, a_bot, a_top])
-ab.add_solid_edge(par_r, ser_r); ab.add_solid_edge(ser_r, a_bot); ab.add_solid_edge(ser_r, a_top)
-ab.root = par_r
-result("above | retina=top_bright  (cycle 2 target)", ab.evaluate_against(field("top_bright")))
-result("above | tactile=bot_bright (suppressed)",     ab.evaluate_against(field("bottom_bright")))
+for recipe, note in [
+    ("top",  "BOTTOM cond low  → tgt suppressed"),
+    ("bot",  "BOTTOM cond high → tgt active"),
+    ("uni",  "BOTTOM cond=0.9  → tgt.value=0.9 → output 0.810"),
+    ("low",  "both dim         → near zero"),
+]:
+    act  = gated.evaluate_against(field(recipe))
+    cond_act = gated._nodes["cond"].activation
+    tgt_val  = gated._nodes["tgt"].value
+    result(recipe, act, f"cond={cond_act:.2f} → tgt.value={tgt_val:.2f} → act={act:.3f} {note}")
 
 
-# =============================================================
-# Demo 8 — MULTI-MODAL field pooling
-# =============================================================
-header("Demo 8 — Multi-modal Pooling: retina + tactile")
+# =================================================================
+# Demo 3 — PlanNode replacement rule
+# =================================================================
+header("Demo 3 — PlanNode: probabilistic spatial replacement rule")
 print(textwrap.dedent("""
-  The 'above' concept (艮 scan of whole field) sees both:
-    Retina:  top_bright field, weight=1.0  → 艮 scores ~0.9
-    Tactile: bottom_bright field, weight=0.5 → 艮 scores ~0.367
+  PlanNode([template, content], field):
+    activation = p × yang_scan + (1-p) × full_scan
+    p = template.value (default 1.0)
 
-  Pooled result = (1.0 × 0.9 + 0.5 × 0.367) / 1.5 ≈ 0.722
+  With p=1 (no dashed edge on template):
+    activation = 1 × yang_scan + 0 × full_scan = yang_scan
+    = content evaluated only in template's yang sub-regions.
+
+  With p=0.8 (some dashed edge set template.value=0.8):
+    activation = 0.8 × yang_scan + 0.2 × full_scan
+    20% of the full-field scan "leaks through" even where template is yin.
 """))
 
-def build_multimodal_above():
-    g   = ConceptGraph("above_mm")
-    par = ParallelNode("par")
-    sc  = ObjectNode("sc", TRIGRAM_PATTERNS["top"], Orientation.VERTICAL, name="top")
-    ret = RetinaNode("ret",  field=field("top_bright"),    initial_weight=1.0)
-    tac = TactileNode("tac", field=field("bottom_bright"), initial_weight=0.5)
-    g.add_nodes([par, sc, ret, tac])
-    g.add_solid_edge(par, ret); g.add_solid_edge(par, tac); g.add_solid_edge(par, sc)
-    g.root = par; return g
+section("TOP template (p=1) + UNIVERSAL content")
+print("  Content constrained to the top-third sub-region of the field.")
+print("  High when that region is bright; bottom brightness irrelevant.")
 
-mm = build_multimodal_above()
-act_mm = mm.evaluate()
-result("retina(top_bright,w=1) + tactile(bot_bright,w=0.5)", act_mm, "expected ≈0.722")
-section("Verify individual modality scores:")
-ab2 = single(TRIGRAM_PATTERNS["top"], Orientation.VERTICAL, "top")
-result("  top(艮) | top_bright (retina alone)", ab2.evaluate_against(field("top_bright")))
-result("  top(艮) | bot_bright (tactile alone)", ab2.evaluate_against(field("bottom_bright")))
-print(f"  Weighted avg = (1.0×{ab2.evaluate_against(field('top_bright')):.3f} + "
-      f"0.5×{ab2.evaluate_against(field('bottom_bright')):.3f}) / 1.5 = {act_mm:.3f}")
+g3 = ConceptGraph("plan_top_uni")
+par3  = ParallelNode("par")
+plan3 = PlanNode("plan")
+tmpl3 = ObjectNode("t", TOP, V, name="top-tmpl")
+cont3 = ObjectNode("c", UNIVERSAL, V, name="uni-cont")
+g3.add_nodes([par3, plan3, tmpl3, cont3])
+g3.add_solid_edge(par3, plan3)
+g3.add_solid_edge(plan3, tmpl3)
+g3.add_solid_edge(plan3, cont3)
+g3.root = par3
+
+for recipe, note in [
+    ("top",    "top zone bright → content sees bright region → HIGH"),
+    ("bot",    "top zone dim    → content sees dim region   → LOW"),
+    ("uni",    "top zone bright → HIGH (bottom irrelevant)"),
+    ("center", "top zone dim    → LOW (center is mid-field)"),
+]:
+    result(recipe, g3.evaluate_against(field(recipe)), note)
+
+section("TOP template (p=0.8) + UNIVERSAL content")
+print("  80% constrained to top zone, 20% full-field scan leaks through.")
+print("  On bot-bright field: top zone dim (0.1) but 20% of full scan adds back.")
+
+g3b = ConceptGraph("plan_top_uni_partial")
+par3b=ParallelNode("par"); plan3b=PlanNode("plan")
+tmpl3b=ObjectNode("t",TOP,V,name="top-tmpl"); cont3b=ObjectNode("c",UNIVERSAL,V,name="uni-cont")
+tmpl3b.value = 0.8   # manually set for illustration (normally via dashed edge)
+g3b.add_nodes([par3b,plan3b,tmpl3b,cont3b])
+g3b.add_solid_edge(par3b,plan3b); g3b.add_solid_edge(plan3b,tmpl3b); g3b.add_solid_edge(plan3b,cont3b)
+g3b.root=par3b
+
+# Note: evaluate() resets all values to 1.0 before pass 1,
+# so we use _plan_activate directly to show p=0.8 arithmetic.
+for recipe, note in [
+    ("top", "0.8×0.9 + 0.2×UNIV(full)"),
+    ("bot", "0.8×0.1 + 0.2×UNIV(full)"),
+]:
+    tmpl3b.value = 0.8
+    result(recipe, plan3b._plan_activate([tmpl3b, cont3b], field(recipe)), note)
 
 
-# =============================================================
-# Demo 9 — CONCEPT CLASSIFIER
-# =============================================================
-header("Demo 9 — Concept Classifier: which schema best matches?")
+# =================================================================
+# Demo 4 — PlanNode chaining: three children
+# =================================================================
+header("Demo 4 — PlanNode chaining: PERIPHERY → BOTTOM → UNIVERSAL")
 print(textwrap.dedent("""
-  Five concepts scored against five fields.
-  A good lexicon produces unambiguous winners.
+  Three-child plan: [PERIPHERY, BOTTOM, UNIVERSAL]
+
+  Step 1: realize plan([BOTTOM, UNIVERSAL], field) for each yang
+          sub-region of PERIPHERY.
+  Step 2: PERIPHERY templates the result of step 1.
+
+  PERIPHERY (1,0,1): yang at bottom and top thirds.
+  BOTTOM (1,0,0):    yang at bottom third (of its sub-region).
+  UNIVERSAL (1,1,1): scans all bands of its sub-region.
+
+  With all values=1, realized pattern:
+    PERIPHERY yang → bottom-third: BOTTOM scans it → its bottom-third
+    PERIPHERY yang → top-third:    BOTTOM scans it → its bottom-third
+
+  So the realized concept detects: bottom of the bottom-third
+  AND bottom of the top-third (i.e. rows at 6-9 and 4-6 of a 9-row field).
+"""))
+
+g4 = ConceptGraph("chain3")
+par4   = ParallelNode("par")
+plan4  = PlanNode("plan")
+peri   = ObjectNode("peri", PERIPHERY_V, V, name="periphery")
+bot_n  = ObjectNode("bot",  BOTTOM,      V, name="bottom")
+uni4   = ObjectNode("uni",  UNIVERSAL,   V, name="universal")
+g4.add_nodes([par4, plan4, peri, bot_n, uni4])
+g4.add_solid_edge(par4, plan4)
+g4.add_solid_edge(plan4, peri)
+g4.add_solid_edge(plan4, bot_n)
+g4.add_solid_edge(plan4, uni4)
+g4.root = par4
+
+for recipe, note in [
+    ("bot",    "bottom is bright → realized zone bright → HIGH"),
+    ("top",    "bottom zones dim → LOW"),
+    ("uni",    "all zones bright → HIGH"),
+    ("low",    "all dim          → LOW"),
+]:
+    result(recipe, g4.evaluate_against(field(recipe)), note)
+
+
+# =================================================================
+# Demo 5 — ReturnNode
+# =================================================================
+header("Demo 5 — ReturnNode: named output portal")
+print(textwrap.dedent("""
+  A ReturnNode is placed as a child of a ParallelNode alongside scanners.
+  The ParallelNode writes its scanner average into the ReturnNode.
+  ConceptGraph.evaluate() returns the last ReturnNode's activation.
+
+  This lets a concept have multiple named outputs, and separates the
+  "answer" from intermediate computation.  The ReturnNode does NOT alter
+  any computation — it is a passive marker.
+"""))
+
+g5 = ConceptGraph("return_demo")
+par5 = ParallelNode("par")
+sc5  = ObjectNode("sc", TOP, V, name="top-scanner")
+ret5 = ReturnNode("ret")
+g5.add_nodes([par5, sc5, ret5])
+g5.add_solid_edge(par5, sc5)
+g5.add_solid_edge(par5, ret5)
+g5.root = par5
+
+for recipe, note in [
+    ("top", "top bright → scanner fires → ReturnNode receives result"),
+    ("bot", "top dim    → scanner low   → ReturnNode receives low"),
+]:
+    act = g5.evaluate_against(field(recipe))
+    result(recipe, act, f"ReturnNode.activation = {ret5.activation:.3f}  {note}")
+
+
+# =================================================================
+# Demo 6 — "above": the full concept using scan + plan + dashed edges
+# =================================================================
+header('Demo 6 — "above": full concept graph')
+print(textwrap.dedent("""
+  Cognitive structure of "above":
+    Figure is present in the top region AND the bottom region is empty ground.
+
+  Graph structure:
+    par_root [retina]
+      ├── ser (VERTICAL split: children[0]=bottom, children[1]=top)
+      │     ├── yang_0  UNIVERSAL — scans bottom strip
+      │     └── yang_1  UNIVERSAL — scans top strip
+      └── par_out
+            ├── plan
+            │     ├── yin_0  VOID  — template (all-yin, blocks by default)
+            │     └── yang_2 UNIVERSAL — content
+            └── ReturnNode
+
+  Dashed edges:
+    yang_0 ⤳ yin_0   (bottom detection → yin template value)
+    yang_1 ⤳ yang_2  (top detection → content value)
+
+  Replacement rule for plan(yin_0, yang_2):
+    yin_0 is all-yin → yang_scan = 0 always
+    result = yin_0.value × 0 + (1 - yin_0.value) × yang_2.evaluate(field)
+           = (1 - bottom_substance) × (top_substance × field_scan)
+
+  → HIGH when top is bright (substance present) AND bottom is dim (empty ground).
+  → LOW  when bottom is bright (ground occupied — so top is not "above" it).
+  → LOW  when both empty (nothing to be above anything).
+"""))
+
+def build_above():
+    g = ConceptGraph("above")
+    par_root = ParallelNode("par_root")
+    ser      = SerialNode("ser", split_orientation=Orientation.VERTICAL)
+    yang_0   = ObjectNode("y0",  UNIVERSAL, V, name="bot-scanner")
+    yang_1   = ObjectNode("y1",  UNIVERSAL, V, name="top-scanner")
+    par_out  = ParallelNode("par_out")
+    plan     = PlanNode("plan")
+    yin_0    = ObjectNode("yn0", VOID, V, name="yin-template")
+    yang_2   = ObjectNode("y2",  UNIVERSAL, V, name="content")
+    ret      = ReturnNode("ret")
+
+    g.add_nodes([par_root, ser, yang_0, yang_1,
+                 par_out, plan, yin_0, yang_2, ret])
+
+    g.add_solid_edge(par_root, ser)
+    g.add_solid_edge(ser,      yang_0)    # children[0] = bottom strip
+    g.add_solid_edge(ser,      yang_1)    # children[1] = top strip
+    g.add_solid_edge(par_root, par_out)
+    g.add_solid_edge(par_out,  plan)
+    g.add_solid_edge(par_out,  ret)
+    g.add_solid_edge(plan,     yin_0)     # template
+    g.add_solid_edge(plan,     yang_2)    # content
+
+    g.add_dashed_edge(yang_0, yin_0)      # bottom scan sets template gate
+    g.add_dashed_edge(yang_1, yang_2)     # top scan sets content gate
+
+    g.root = par_root
+    return g
+
+above = build_above()
+
+section("Results with trace")
+for recipe, note in [
+    ("top",  "top bright, bottom dim   — above TRUE"),
+    ("bot",  "bottom bright, top dim   — above FALSE"),
+    ("uni",  "both bright              — ambiguous/low (ground occupied)"),
+    ("low",  "both empty               — nothing to be above anything"),
+    ("mid",  "uniform 0.5             — partial everywhere"),
+]:
+    act = above.evaluate_against(field(recipe))
+    y0  = above._nodes["y0"];  y1  = above._nodes["y1"]
+    yn  = above._nodes["yn0"]; y2  = above._nodes["y2"]
+    pl  = above._nodes["plan"]
+    print(f"  {recipe}:  bot={y0.activation:.2f}  top={y1.activation:.2f}  "
+          f"yin.v={yn.value:.2f}  cont.v={y2.value:.2f}  "
+          f"plan={pl.activation:.3f}  final={act:.3f}   {note}")
+
+
+# =================================================================
+# Demo 7 — Multi-modal pooling
+# =================================================================
+header("Demo 7 — Multi-modal pooling: retina + tactile")
+print(textwrap.dedent("""
+  The same TOP scanner evaluates both modalities simultaneously.
+    Retina  (visual): top-bright field, weight=1.0 → TOP activation ≈ 0.9
+    Tactile (haptic): bot-bright field, weight=0.5 → TOP activation ≈ 0.1
+
+  Pooled result = (1.0 × 0.9 + 0.5 × 0.1) / 1.5 ≈ 0.633
+"""))
+
+g7   = ConceptGraph("above_mm")
+par7 = ParallelNode("par")
+sc7  = ObjectNode("sc", TOP, V, name="top-sc")
+ret7 = RetinaNode("ret",  field=field("top"),  initial_weight=1.0)
+tac7 = TactileNode("tac", field=field("bot"),  initial_weight=0.5)
+g7.add_nodes([par7, sc7, ret7, tac7])
+g7.add_solid_edge(par7, ret7)
+g7.add_solid_edge(par7, tac7)
+g7.add_solid_edge(par7, sc7)
+g7.root = par7
+
+act7 = g7.evaluate()
+result("retina(top,w=1) + tactile(bot,w=0.5)", act7, "expected ≈ 0.633")
+
+section("Verify individual scores:")
+g7v = single(TOP, V, "top")
+result("  TOP | top-bright alone", g7v.evaluate_against(field("top")))
+result("  TOP | bot-bright alone", g7v.evaluate_against(field("bot")))
+print(f"  Weighted avg = (1.0×0.900 + 0.5×0.100) / 1.5 = {(0.9+0.05)/1.5:.3f}")
+
+
+# =================================================================
+# Demo 8 — Concept classifier
+# =================================================================
+header("Demo 8 — Concept classifier: which schema best matches?")
+print(textwrap.dedent("""
+  Each concept is a single ObjectNode scanning the full field.
+  The trigram whose yang-band pattern best matches the field's
+  spatial distribution scores highest.
 """))
 
 concepts = {
-    "above  (top/艮 V)" : single(TRIGRAM_PATTERNS["top"], Orientation.VERTICAL,   "top-V"),
-    "below  (bottom/震 V)" : single(TRIGRAM_PATTERNS["bottom"], Orientation.VERTICAL,   "bottom-V"),
-    "left   (bottom/震 H)" : single(TRIGRAM_PATTERNS["bottom"], Orientation.HORIZONTAL, "left"),
-    "right  (top/艮 H)" : single(TRIGRAM_PATTERNS["top"], Orientation.HORIZONTAL, "right"),
-    "center (坎)"  : build_center(),
-    "all    (universal/乾)"  : single(TRIGRAM_PATTERNS["universal"], Orientation.VERTICAL,   "universal-V"),
+    "top      (0,0,1)": single(TOP,            V, "top"),
+    "bottom   (1,0,0)": single(BOTTOM,         V, "bottom"),
+    "left     (1,0,0)": single(LEFT,           H, "left"),
+    "right    (0,0,1)": single(RIGHT,          H, "right"),
+    "center-V (0,1,0)": single(CENTER_V,       V, "center-V"),
+    "universal(1,1,1)": single(UNIVERSAL,      V, "universal"),
+    "upper    (0,1,1)": single(MAJORITY_UPPER, V, "upper"),
+    "lower    (1,1,0)": single(MAJORITY_LOWER, V, "lower"),
 }
 
-test_cases = {
-    "top_bright   ": "top_bright",
-    "bottom_bright": "bottom_bright",
-    "left_bright  ": "left_bright",
-    "right_bright ": "right_bright",
-    "center_bright": "center_bright",
-    "uniform_high ": "uniform_high",
+test_fields = {
+    "top-bright   ": "top",
+    "bot-bright   ": "bot",
+    "left-bright  ": "left",
+    "right-bright ": "right",
+    "center-bright": "center",
+    "uniform-high ": "uni",
 }
 
-for flabel, recipe in test_cases.items():
-    section(f"Field: {flabel.strip()}")
+for fname, recipe in test_fields.items():
+    section(f"Field: {fname.strip()}")
     scores = {n: g.evaluate_against(field(recipe)) for n, g in concepts.items()}
     ranked = sorted(scores.items(), key=lambda x: -x[1])
-    for rank, (n, score) in enumerate(ranked):
+    for rank, (n, score) in enumerate(ranked[:4]):   # show top 4
         result(f"  {n}", score, "← BEST" if rank == 0 else "")
 
 print()
-print("=" * 62)
+print("=" * 64)
 print("  All demos complete.")
-print("=" * 62)
+print("=" * 64)
 print()
